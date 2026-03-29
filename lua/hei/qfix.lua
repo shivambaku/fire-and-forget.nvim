@@ -37,8 +37,7 @@ function M.create_qfix_entries(response)
 
 	local lines = vim.split(response, "\n")
 	for _, line in ipairs(lines) do
-		---@diagnostic disable-next-line: undefined-field
-		line = line:trim()
+		line = vim.trim(line)
 
 		if line:match("^```") then
 			goto continue
