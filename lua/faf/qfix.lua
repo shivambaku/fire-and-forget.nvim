@@ -1,13 +1,13 @@
 local M = {}
 
----@class hei.QFixEntry
+---@class faf.QFixEntry
 ---@field filename string
 ---@field lnum number
 ---@field col number
 ---@field text string
 
 ---@param line string
----@return hei.QFixEntry|nil
+---@return faf.QFixEntry|nil
 local function parse_line(line)
 	local filepath, lnum_raw, rest = line:match("^(.-):(%d+):(.+)$")
 	if not filepath or not lnum_raw or not rest then
@@ -31,7 +31,7 @@ local function parse_line(line)
 end
 
 ---@param response string
----@return hei.QFixEntry[]
+---@return faf.QFixEntry[]
 function M.create_qfix_entries(response)
 	local qf_list = {}
 

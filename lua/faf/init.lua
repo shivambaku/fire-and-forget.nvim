@@ -1,6 +1,6 @@
-local windows = require("hei.windows")
-local requests = require("hei.requests")
-local qfix = require("hei.qfix")
+local windows = require("faf.windows")
+local requests = require("faf.requests")
+local qfix = require("faf.qfix")
 
 local M = {}
 
@@ -136,15 +136,16 @@ local function handle_qfix_result(id, response)
 	local qfix_items = qfix.create_qfix_entries(response)
 	requests.set_qfix_items(id, qfix_items)
 	if #qfix_items > 0 then
-		vim.notify("hei: " .. #qfix_items .. " locations found", vim.log.levels.INFO)
+		vim.notify("faf: " .. #qfix_items .. " locations found", vim.log.levels.INFO)
 	end
 end
 
----@param r hei.Request
+---@param r faf.Request
 ---@return string
 local function format_request(r)
 	local label = state_labels[r.state] or ("[" .. r.state .. "]")
-	return string.format("%s %s: %s", label, r.mode, truncate(r.prompt, 60))
+	local prompt_clean = r.prompt:gsub("\n", " "):gsub("%s+", " ")
+	return string.format("%s %s: %s", label, r.mode, truncate(prompt_clean, 60))
 end
 
 ---@param mode "ask" | "vibe" | "tutorial"
@@ -152,21 +153,23 @@ end
 ---@param visual_text string[]?
 local function submit_request(mode, prompt, visual_text)
 	local id = requests.add(mode, prompt, visual_text ~= nil)
+	vim.cmd("redrawstatus")
 	local cmd = build_command(mode, prompt, visual_text)
 
 	local proc = vim.system(cmd, { text = true }, function(obj)
 		vim.schedule(function()
 			local response, state = parse_result(obj)
-			requests.finish(id, response, state)
 			if state == "done" then
 				handle_qfix_result(id, response)
 			end
+			requests.finish(id, response, state)
+			vim.cmd("redrawstatus")
 			local req = requests.get(id)
 			if req then
 				local symbol = state == "done" and "✓" or "✗"
 				local level = state == "done" and vim.log.levels.INFO or vim.log.levels.ERROR
 				local prompt_short = truncate(req.prompt, 40)
-				vim.notify("hei " .. symbol .. " " .. req.mode .. ": " .. prompt_short, level)
+				vim.notify("faf " .. symbol .. " " .. req.mode .. ": " .. prompt_short, level)
 			end
 		end)
 	end)
@@ -179,22 +182,29 @@ end
 local function select_request(id, on_back)
 	local request = requests.get(id)
 	if not request or not request.response then
-		vim.notify("hei: no response to display", vim.log.levels.WARN)
+		vim.notify("faf: no response to display", vim.log.levels.WARN)
 		return
 	end
-	windows.open_response({
-		mode = request.mode,
-		started_at = request.started_at,
-		content = request.response,
-		qfix_items = request.qfix_items or {},
-		on_back = on_back,
-	})
+
+	local has_qfix = request.qfix_items and #request.qfix_items > 0
+
+	if has_qfix then
+		windows.open_quickfix(request.qfix_items, "faf [" .. request.mode .. "]")
+	else
+		windows.open_response({
+			mode = request.mode,
+			started_at = request.started_at,
+			content = request.response,
+			on_back = on_back,
+		})
+	end
 end
 
 ---@param id number
 local function cancel_request(id)
 	requests.cancel(id)
-	vim.notify("hei: request cancelled", vim.log.levels.INFO)
+	vim.cmd("redrawstatus")
+	vim.notify("faf: request cancelled", vim.log.levels.INFO)
 end
 
 ---@param restore_cursor number?
@@ -248,7 +258,16 @@ end
 
 local function cmd_cancel()
 	requests.cancel_all()
-	vim.notify("hei: all requests cancelled", vim.log.levels.INFO)
+	vim.cmd("redrawstatus")
+	vim.notify("faf: all requests cancelled", vim.log.levels.INFO)
+end
+
+function M.statusline()
+	local count = requests.count_running()
+	if count == 0 then
+		return ""
+	end
+	return "faf:" .. count
 end
 
 ---@param opts? { model?: string, max_history?: number, keymaps?: boolean | table }
@@ -256,9 +275,9 @@ function M.setup(opts)
 	options = vim.tbl_deep_extend("force", defaults, opts or {})
 	requests.setup({ max_history = options.max_history })
 
-	vim.api.nvim_create_user_command("HeiInput", cmd_input, {})
-	vim.api.nvim_create_user_command("HeiList", cmd_list, {})
-	vim.api.nvim_create_user_command("HeiCancel", cmd_cancel, {})
+	vim.api.nvim_create_user_command("FafInput", cmd_input, {})
+	vim.api.nvim_create_user_command("FafList", cmd_list, {})
+	vim.api.nvim_create_user_command("FafCancel", cmd_cancel, {})
 
 	local km = options.keymaps
 	if km == false then
@@ -266,13 +285,13 @@ function M.setup(opts)
 	end
 
 	if km.input then
-		vim.keymap.set({ "n", "v" }, km.input, cmd_input, { desc = "hei: input" })
+		vim.keymap.set({ "n", "v" }, km.input, cmd_input, { desc = "faf: input" })
 	end
 	if km.list then
-		vim.keymap.set("n", km.list, cmd_list, { desc = "hei: open requests" })
+		vim.keymap.set("n", km.list, cmd_list, { desc = "faf: open requests" })
 	end
 	if km.cancel then
-		vim.keymap.set("n", km.cancel, cmd_cancel, { desc = "hei: cancel all" })
+		vim.keymap.set("n", km.cancel, cmd_cancel, { desc = "faf: cancel all" })
 	end
 end
 

@@ -1,6 +1,6 @@
 local M = {}
 
----@class hei.Request
+---@class faf.Request
 ---@field id number
 ---@field mode "ask" | "vibe" | "tutorial"
 ---@field prompt string
@@ -11,7 +11,7 @@ local M = {}
 ---@field qfix_items {filename: string, lnum: number, col: number, text: string}[]
 ---@field _handle vim.SystemObj | nil
 
----@type hei.Request[]
+---@type faf.Request[]
 local requests = {}
 local next_id = 1
 local max_history = 50
@@ -23,7 +23,7 @@ end
 
 ---@return string
 local function data_dir()
-	return vim.fn.stdpath("data") .. "/hei/" .. project_key()
+	return vim.fn.stdpath("data") .. "/faf/" .. project_key()
 end
 
 ---@return string
@@ -110,6 +110,7 @@ function M.add(mode, prompt, visual)
 		state = "running",
 		response = nil,
 		started_at = os.time(),
+		qfix_items = {},
 		_handle = nil,
 	}
 	table.insert(requests, r)
@@ -119,7 +120,7 @@ function M.add(mode, prompt, visual)
 end
 
 ---@param id number
----@return hei.Request | nil
+---@return faf.Request | nil
 function M.get(id)
 	for _, r in ipairs(requests) do
 		if r.id == id then
@@ -128,7 +129,7 @@ function M.get(id)
 	end
 end
 
----@return hei.Request[]
+---@return faf.Request[]
 function M.list()
 	local sorted = {}
 	for _, r in ipairs(requests) do
@@ -138,6 +139,16 @@ function M.list()
 		return a.started_at > b.started_at
 	end)
 	return sorted
+end
+
+function M.count_running()
+	local count = 0
+	for _, r in ipairs(requests) do
+		if r.state == "running" then
+			count = count + 1
+		end
+	end
+	return count
 end
 
 ---@param id number

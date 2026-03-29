@@ -1,11 +1,11 @@
 local M = {}
 
----@class hei.Window
+---@class faf.Window
 ---@field window_id number
 ---@field buffer_id number
 ---@field config fun(): table
 
----@type hei.Window | nil
+---@type faf.Window | nil
 local window_active = nil
 
 ---@return number width
@@ -36,7 +36,7 @@ end
 
 ---@param config_func fun(): table
 ---@param enter boolean
----@return hei.Window
+---@return faf.Window
 local function create_floating_window(config_func, enter)
 	local buffer_id = vim.api.nvim_create_buf(false, true)
 	vim.bo[buffer_id].bufhidden = "wipe"
@@ -73,7 +73,7 @@ vim.api.nvim_create_autocmd("VimResized", {
 	end,
 })
 
----@class hei.InputOpts
+---@class faf.InputOpts
 ---@field mode string
 ---@field visual boolean
 ---@field on_mode_change fun(new_mode: string)
@@ -81,8 +81,8 @@ vim.api.nvim_create_autocmd("VimResized", {
 ---@field on_cancel fun()
 
 ---@param modes string[]
----@param opts hei.InputOpts
----@return hei.Window
+---@param opts faf.InputOpts
+---@return faf.Window
 function M.open_input(modes, opts)
 	close_window_active()
 
@@ -112,7 +112,7 @@ function M.open_input(modes, opts)
 	end
 
 	local window = create_floating_window(config, true)
-	vim.api.nvim_buf_set_name(window.buffer_id, "hei://input")
+	vim.api.nvim_buf_set_name(window.buffer_id, "faf://input")
 	vim.bo[window.buffer_id].buftype = "acwrite"
 	vim.cmd("startinsert")
 
@@ -155,13 +155,13 @@ function M.open_input(modes, opts)
 	return window
 end
 
----@class hei.ListOpts
+---@class faf.ListOpts
 ---@field items { display: string, id: number, state: string }[]
 ---@field on_select fun(id: number, cursor_pos: number)
 ---@field on_cancel fun(id: number)
 
----@param opts hei.ListOpts
----@return hei.Window
+---@param opts faf.ListOpts
+---@return faf.Window
 function M.open_list(opts)
 	close_window_active()
 
@@ -225,27 +225,32 @@ function M.open_list(opts)
 	return window
 end
 
----@class hei.ResponseOpts
+---@param items {filename: string, lnum: number, col: number, text: string}[]
+---@param title string
+function M.open_quickfix(items, title)
+	close_window_active()
+	vim.fn.setqflist({}, "r", { title = title, items = items })
+	vim.cmd("copen")
+end
+
+---@class faf.ResponseOpts
 ---@field mode string
 ---@field started_at number
 ---@field content string
----@field qfix_items {filename: string, lnum: number, col: number, text: string}[]
 ---@field on_back fun() | nil
 
----@param opts hei.ResponseOpts
----@return hei.Window
+---@param opts faf.ResponseOpts
+---@return faf.Window
 function M.open_response(opts)
 	close_window_active()
 
 	local time = os.date("%H:%M", opts.started_at)
-	local has_qfix = opts.qfix_items and #opts.qfix_items > 0
 
 	local config = function()
-		local qfix_hint = has_qfix and " q quickfix" or ""
 		local config = create_centered_config(0.8, 0.6)
 		config.footer = {
 			{
-				"  [" .. opts.mode .. "] " .. time .. "  q back  s split" .. qfix_hint .. "  ",
+				"  [" .. opts.mode .. "] " .. time .. "  q back  s split  ",
 				"Comment",
 			},
 		}
@@ -275,14 +280,7 @@ function M.open_response(opts)
 		vim.bo[split_buf].bufhidden = "wipe"
 		vim.wo[split_win].wrap = true
 		vim.wo[split_win].linebreak = true
-		vim.api.nvim_buf_set_name(split_buf, "hei response")
-	end
-
-	local function add_to_qfixlist()
-		if has_qfix then
-			vim.fn.setqflist({}, "r", { title = "hei [" .. opts.mode .. "]", items = opts.qfix_items })
-			vim.cmd("copen")
-		end
+		vim.api.nvim_buf_set_name(split_buf, "faf response")
 	end
 
 	vim.keymap.set("n", "q", function()
@@ -302,8 +300,6 @@ function M.open_response(opts)
 	vim.keymap.set("n", "s", open_split, { buffer = window.buffer_id })
 
 	vim.keymap.set("n", "<Esc>", close_window_active, { buffer = window.buffer_id })
-
-	vim.keymap.set("n", "<leader>q", add_to_qfixlist, { buffer = window.buffer_id })
 
 	return window
 end
