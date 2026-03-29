@@ -66,9 +66,9 @@ The first line must be a Markdown H1 title.
 }
 
 local state_labels = {
-	done = "[done]     ",
-	running = "[running]  ",
-	failed = "[failed]   ",
+	done = "[done]",
+	running = "[running]",
+	failed = "[failed]",
 	cancelled = "[cancelled]",
 }
 
@@ -145,7 +145,11 @@ end
 local function format_request(r)
 	local label = state_labels[r.state] or ("[" .. r.state .. "]")
 	local prompt_clean = r.prompt:gsub("\n", " "):gsub("%s+", " ")
-	return string.format("%s %s: %s", label, r.mode, truncate(prompt_clean, 60))
+	local qfix_str = ""
+	if r.qfix_items and #r.qfix_items > 0 then
+		qfix_str = string.format("[qf:%d]", #r.qfix_items)
+	end
+	return string.format("%-11s %-7s %-8s: %s", label, qfix_str, r.mode, truncate(prompt_clean, 50))
 end
 
 ---@param mode "ask" | "vibe" | "tutorial"
