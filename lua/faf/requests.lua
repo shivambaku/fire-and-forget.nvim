@@ -8,6 +8,7 @@ local M = {}
 ---@field state "running" | "done" | "failed" | "cancelled"
 ---@field response string | nil
 ---@field started_at number
+---@field session_id string | nil
 ---@field qfix_items {filename: string, lnum: number, col: number, text: string}[]
 ---@field _handle vim.SystemObj | nil
 
@@ -51,6 +52,7 @@ local function save()
 			state = r.state,
 			response = r.response,
 			started_at = r.started_at,
+			session_id = r.session_id,
 			qfix_items = r.qfix_items,
 		})
 	end
@@ -110,6 +112,7 @@ function M.add(mode, prompt, visual)
 		state = "running",
 		response = nil,
 		started_at = os.time(),
+		session_id = nil,
 		qfix_items = {},
 		_handle = nil,
 	}
@@ -157,6 +160,33 @@ function M.set_qfix_items(id, qfix_items)
 	local r = M.get(id)
 	if r then
 		r.qfix_items = qfix_items
+	end
+end
+
+---@param id number
+---@param session_id string
+function M.set_session_id(id, session_id)
+	local r = M.get(id)
+	if r then
+		r.session_id = session_id
+	end
+end
+
+---@param id number
+function M.set_state_running(id)
+	local r = M.get(id)
+	if r then
+		r.state = "running"
+		r._handle = nil
+	end
+end
+
+---@param id number
+---@param state "running" | "done" | "failed" | "cancelled"
+function M.set_state(id, state)
+	local r = M.get(id)
+	if r then
+		r.state = state
 	end
 end
 

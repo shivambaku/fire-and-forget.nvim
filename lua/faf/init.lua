@@ -37,6 +37,7 @@ You may include both a response and file locations.
 - Use 1-based line and column numbers.
 - The value after the first comma is the line span.
 - Notes must stay on one line.
+- Do NOT wrap file paths in backticks or code formatting.
 ]],
 	vibe = [[
 ## Output
@@ -48,6 +49,7 @@ After making changes, list ALL modified files in this format:
 - Use 1-based line and column numbers.
 - The value after the first comma is the line span.
 - Notes must stay on one line.
+- Do NOT wrap file paths in backticks or code formatting.
 ]],
 	tutorial = [[
 ## Task
@@ -72,35 +74,27 @@ local state_labels = {
 	cancelled = "[cancelled]",
 }
 
---- @return string[] | nil
-local function capture_visual()
-	local mode = vim.api.nvim_get_mode().mode
-	if mode ~= "v" and mode ~= "V" and mode ~= "\22" then
-		return nil
-	end
-	local lines = vim.fn.getregion(vim.fn.getpos("v"), vim.fn.getpos("."))
-	if #lines == 0 then
-		return nil
-	end
-	return lines
-end
-
 ---@param mode string
 ---@param prompt string
 ---@param visual_text string[]?
+---@param session_id string?
 ---@return string[]
-local function build_command(mode, prompt, visual_text)
+local function build_command(mode, prompt, visual_text, session_id)
 	local agent = agent_map[mode]
 	local hint = mode_hints[mode]
 	local full_prompt
 
 	if visual_text then
 		full_prompt = table.concat(visual_text, "\n") .. "\n\n" .. prompt .. "\n\n" .. hint
+		print(full_prompt)
 	else
 		full_prompt = prompt .. "\n\n" .. hint
 	end
 
-	local cmd = { "opencode", "run", "--agent", agent }
+	local cmd = { "opencode", "run", "--format", "json", "--agent", agent }
+	if session_id then
+		vim.list_extend(cmd, { "--session", session_id })
+	end
 	if options.model then
 		vim.list_extend(cmd, { "-m", options.model })
 	end
@@ -119,15 +113,26 @@ local function truncate(s, max_len)
 	return s
 end
 
----@param obj vim.SystemCompleted
+---@param stdout string
+---@return string session_id
 ---@return string response
----@return "done" | "failed" state
-local function parse_result(obj)
-	local response = obj.stdout or ""
-	if obj.code ~= 0 and response == "" then
-		return "Error: exit code " .. obj.code .. "\n" .. (obj.stderr or ""), "failed"
+local function parse_json_result(stdout)
+	local session_id = ""
+	local response_parts = {}
+
+	for line in stdout:gmatch("[^\n]+") do
+		local ok, decoded = pcall(vim.json.decode, line)
+		if ok and type(decoded) == "table" then
+			if decoded.sessionID and session_id == "" then
+				session_id = decoded.sessionID
+			end
+			if decoded.type == "text" and decoded.part and decoded.part.text then
+				table.insert(response_parts, decoded.part.text)
+			end
+		end
 	end
-	return response, "done"
+
+	return session_id, table.concat(response_parts, "\n")
 end
 
 ---@param id number
@@ -142,14 +147,16 @@ end
 
 ---@param r faf.Request
 ---@return string
+---@return string state_label
+---@return string mode_str
 local function format_request(r)
 	local label = state_labels[r.state] or ("[" .. r.state .. "]")
 	local prompt_clean = r.prompt:gsub("\n", " "):gsub("%s+", " ")
-	local qfix_str = ""
+	local mode_str = r.mode
 	if r.qfix_items and #r.qfix_items > 0 then
-		qfix_str = string.format("[qf:%d]", #r.qfix_items)
+		mode_str = r.mode .. ":" .. #r.qfix_items
 	end
-	return string.format("%-11s %-7s %-8s: %s", label, qfix_str, r.mode, truncate(prompt_clean, 50))
+	return string.format("%-11s %-9s     %s", label, mode_str, prompt_clean), label, mode_str
 end
 
 ---@param mode "ask" | "vibe" | "tutorial"
@@ -158,14 +165,20 @@ end
 local function submit_request(mode, prompt, visual_text)
 	local id = requests.add(mode, prompt, visual_text ~= nil)
 	vim.cmd("redrawstatus")
-	local cmd = build_command(mode, prompt, visual_text)
+	local cmd = build_command(mode, prompt, visual_text, nil)
 
 	local proc = vim.system(cmd, { text = true }, function(obj)
 		vim.schedule(function()
-			local response, state = parse_result(obj)
+			local session_id, response = parse_json_result(obj.stdout or "")
+			local state = "done"
+			if obj.code ~= 0 and response == "" then
+				response = "Error: exit code " .. obj.code .. "\n" .. (obj.stderr or "")
+				state = "failed"
+			end
 			if state == "done" then
 				handle_qfix_result(id, response)
 			end
+			requests.set_session_id(id, session_id)
 			requests.finish(id, response, state)
 			vim.cmd("redrawstatus")
 			local req = requests.get(id)
@@ -175,6 +188,40 @@ local function submit_request(mode, prompt, visual_text)
 				local prompt_short = truncate(req.prompt, 40)
 				vim.notify("faf " .. symbol .. " " .. req.mode .. ": " .. prompt_short, level)
 			end
+		end)
+	end)
+
+	requests.set_handle(id, proc)
+end
+
+---@param id number
+---@param prompt string
+local function submit_followup(id, prompt)
+	local req = requests.get(id)
+	if not req or not req.session_id then
+		vim.notify("faf: no session to continue", vim.log.levels.WARN)
+		return
+	end
+
+	requests.set_state_running(id)
+	vim.cmd("redrawstatus")
+
+	local cmd = build_command(req.mode, prompt, nil, req.session_id)
+
+	local proc = vim.system(cmd, { text = true }, function(obj)
+		vim.schedule(function()
+			local _, response = parse_json_result(obj.stdout or "")
+			local state = "done"
+			if obj.code ~= 0 and response == "" then
+				response = "Error: exit code " .. obj.code .. "\n" .. (obj.stderr or "")
+				state = "failed"
+			end
+			if state == "done" then
+				handle_qfix_result(id, response)
+			end
+			requests.finish(id, response, state)
+			vim.cmd("redrawstatus")
+			vim.notify("faf ✓ follow-up complete", vim.log.levels.INFO)
 		end)
 	end)
 
@@ -196,10 +243,15 @@ local function select_request(id, on_back)
 		windows.open_quickfix(request.qfix_items, "faf [" .. request.mode .. "]")
 	else
 		windows.open_response({
+			id = request.id,
 			mode = request.mode,
+			session_id = request.session_id,
 			started_at = request.started_at,
 			content = request.response,
 			on_back = on_back,
+			on_reply = function(prompt)
+				submit_followup(id, prompt)
+			end,
 		})
 	end
 end
@@ -216,10 +268,14 @@ local function open_request_list(restore_cursor)
 	local reqs = requests.list()
 	local items = vim.iter(reqs)
 		:map(function(r)
+			local display, label, mode_str = format_request(r)
 			return {
-				display = format_request(r),
+				display = display,
 				id = r.id,
 				state = r.state,
+				label = label,
+				mode = mode_str,
+				req_mode = r.mode,
 			}
 		end)
 		:totable()
@@ -239,8 +295,8 @@ local function open_request_list(restore_cursor)
 	end
 end
 
-local function cmd_input()
-	local visual_text = capture_visual()
+---@param visual_text string[]?
+local function cmd_input(visual_text)
 	local mode_current = "ask"
 
 	windows.open_input(modes, {
@@ -279,7 +335,9 @@ function M.setup(opts)
 	options = vim.tbl_deep_extend("force", defaults, opts or {})
 	requests.setup({ max_history = options.max_history })
 
-	vim.api.nvim_create_user_command("FafInput", cmd_input, {})
+	vim.api.nvim_create_user_command("FafInput", function()
+		cmd_input(nil)
+	end, {})
 	vim.api.nvim_create_user_command("FafList", cmd_list, {})
 	vim.api.nvim_create_user_command("FafCancel", cmd_cancel, {})
 
@@ -289,11 +347,24 @@ function M.setup(opts)
 	end
 
 	if km.input then
-		vim.keymap.set({ "n", "v" }, km.input, cmd_input, { desc = "faf: input" })
+		vim.keymap.set("n", km.input, function()
+			cmd_input(nil)
+		end, { desc = "faf: input" })
+
+		vim.keymap.set("v", km.input, function()
+			local lines = vim.fn.getregion(vim.fn.getpos("'<"), vim.fn.getpos("'>"), { type = vim.fn.visualmode() })
+			local t = {}
+			for i, l in ipairs(lines) do
+				t[i] = l
+			end
+			cmd_input(#t > 0 and t or nil)
+		end, { desc = "faf: input" })
 	end
+
 	if km.list then
 		vim.keymap.set("n", km.list, cmd_list, { desc = "faf: open requests" })
 	end
+
 	if km.cancel then
 		vim.keymap.set("n", km.cancel, cmd_cancel, { desc = "faf: cancel all" })
 	end

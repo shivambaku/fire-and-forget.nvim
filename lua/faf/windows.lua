@@ -8,6 +8,21 @@ local M = {}
 ---@type faf.Window | nil
 local window_active = nil
 
+local ns = vim.api.nvim_create_namespace("faf")
+
+local mode_hl = {
+	ask = "DiagnosticWarn",
+	vibe = "DiagnosticError",
+	tutorial = "DiagnosticHint",
+}
+
+local state_hl = {
+	done = "DiagnosticOk",
+	running = "DiagnosticWarn",
+	failed = "DiagnosticError",
+	cancelled = "Comment",
+}
+
 ---@return number width
 ---@return number height
 local function get_ui_dimensions()
@@ -95,18 +110,11 @@ function M.open_input(modes, opts)
 	end
 
 	local config = function()
-		local mode_highlights = {
-			ask = "DiagnosticWarn",
-			vibe = "DiagnosticError",
-			tutorial = "DiagnosticHint",
-		}
-
 		local mode = modes[mode_index]
-		local label = opts.visual and "Visual " .. mode or mode
+		local label = opts.visual and "visual " .. mode or mode
 
 		local config = create_centered_config(0.6, 0.20)
-		config.footer =
-			{ { "[" .. label .. "]  :w submit  q/Esc cancel  <Tab> mode", mode_highlights[mode] or "Comment" } }
+		config.footer = { { "[" .. label .. "]  :w submit  q/Esc cancel  <Tab> mode", mode_hl[mode] or "Comment" } }
 		config.footer_pos = "center"
 		return config
 	end
@@ -156,7 +164,7 @@ function M.open_input(modes, opts)
 end
 
 ---@class faf.ListOpts
----@field items { display: string, id: number, state: string }[]
+---@field items { display: string, id: number, state: string, label: string, mode: string, req_mode: string }[]
 ---@field on_select fun(id: number, cursor_pos: number)
 ---@field on_cancel fun(id: number)
 
@@ -176,6 +184,7 @@ function M.open_list(opts)
 	vim.bo[window.buffer_id].buftype = "nofile"
 	vim.wo[window.window_id].cursorline = true
 	vim.wo[window.window_id].number = false
+	vim.wo[window.window_id].wrap = false
 
 	local lines = #opts.items > 0 and vim.tbl_map(function(i)
 		return i.display
@@ -183,6 +192,17 @@ function M.open_list(opts)
 
 	vim.api.nvim_buf_set_lines(window.buffer_id, 0, -1, false, lines)
 	vim.bo[window.buffer_id].modifiable = false
+
+	for i, item in ipairs(opts.items) do
+		local sh = state_hl[item.state]
+		if sh then
+			vim.hl.range(window.buffer_id, ns, sh, { i - 1, 0 }, { i - 1, 11 }, {})
+		end
+		local mh = mode_hl[item.req_mode]
+		if mh then
+			vim.hl.range(window.buffer_id, ns, mh, { i - 1, 11 }, { i - 1, 21 }, {})
+		end
+	end
 
 	local function select()
 		if #opts.items == 0 then
@@ -205,10 +225,16 @@ function M.open_list(opts)
 		if item and item.state == "running" then
 			opts.on_cancel(item.id)
 			item.state = "cancelled"
-			item.display = item.display:gsub("%[running%]", "[cancelled]")
+			item.label = "[cancelled]"
+			item.display = item.display:gsub("^%[running%]", "[cancelled]")
 			vim.bo[window.buffer_id].modifiable = true
 			vim.api.nvim_buf_set_lines(window.buffer_id, lnum - 1, lnum, false, { item.display })
 			vim.bo[window.buffer_id].modifiable = false
+			vim.hl.range(window.buffer_id, ns, state_hl["cancelled"], { lnum - 1, 0 }, { lnum - 1, 11 }, {})
+			local mh = mode_hl[item.req_mode]
+			if mh then
+				vim.hl.range(window.buffer_id, ns, mh, { lnum - 1, 11 }, { lnum - 1, 21 }, {})
+			end
 		end
 	end
 
@@ -234,10 +260,13 @@ function M.open_quickfix(items, title)
 end
 
 ---@class faf.ResponseOpts
+---@field id number
 ---@field mode string
+---@field session_id string | nil
 ---@field started_at number
 ---@field content string
 ---@field on_back fun() | nil
+---@field on_reply fun(prompt: string) | nil
 
 ---@param opts faf.ResponseOpts
 ---@return faf.Window
@@ -245,14 +274,16 @@ function M.open_response(opts)
 	close_window_active()
 
 	local time = os.date("%H:%M", opts.started_at)
+	local can_reply = opts.session_id ~= nil
 
 	local config = function()
+		local footer_text = "  [" .. opts.mode .. "] " .. time .. "  q back  s split"
+		if can_reply then
+			footer_text = footer_text .. "  r reply"
+		end
 		local config = create_centered_config(0.8, 0.6)
 		config.footer = {
-			{
-				"  [" .. opts.mode .. "] " .. time .. "  q back  s split  ",
-				"Comment",
-			},
+			{ footer_text, "Comment" },
 		}
 		config.footer_pos = "center"
 		return config
@@ -274,6 +305,7 @@ function M.open_response(opts)
 		local split_buf = vim.api.nvim_create_buf(false, false)
 		vim.api.nvim_win_set_buf(split_win, split_buf)
 		vim.api.nvim_buf_set_lines(split_buf, 0, -1, false, content_lines)
+		vim.bo[split_buf].buftype = "nofile"
 		vim.bo[split_buf].filetype = "markdown"
 		vim.bo[split_buf].modifiable = false
 		vim.bo[split_buf].buflisted = false
@@ -281,6 +313,20 @@ function M.open_response(opts)
 		vim.wo[split_win].wrap = true
 		vim.wo[split_win].linebreak = true
 		vim.api.nvim_buf_set_name(split_buf, "faf response")
+	end
+
+	local function reply()
+		if not can_reply or not opts.on_reply then
+			return
+		end
+		close_window_active()
+		M.open_input({ opts.mode }, {
+			mode = opts.mode,
+			visual = false,
+			on_mode_change = function() end,
+			on_submit = opts.on_reply,
+			on_cancel = function() end,
+		})
 	end
 
 	vim.keymap.set("n", "q", function()
@@ -298,6 +344,8 @@ function M.open_response(opts)
 	end, { buffer = window.buffer_id, nowait = true })
 
 	vim.keymap.set("n", "s", open_split, { buffer = window.buffer_id })
+
+	vim.keymap.set("n", "r", reply, { buffer = window.buffer_id })
 
 	vim.keymap.set("n", "<Esc>", close_window_active, { buffer = window.buffer_id })
 
