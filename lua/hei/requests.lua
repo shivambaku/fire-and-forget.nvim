@@ -16,14 +16,17 @@ local requests = {}
 local next_id = 1
 local max_history = 50
 
+---@return string
 local function project_key()
 	return vim.fn.fnamemodify(vim.fn.getcwd(), ":p:h"):gsub("[^a-zA-Z0-9]", "_"):sub(1, -2)
 end
 
+---@return string
 local function data_dir()
 	return vim.fn.stdpath("data") .. "/hei/" .. project_key()
 end
 
+---@return string
 local function data_file()
 	return data_dir() .. "/requests.json"
 end
@@ -87,6 +90,7 @@ local function load()
 	end
 end
 
+---@param opts { max_history?: number }
 function M.setup(opts)
 	opts = opts or {}
 	max_history = opts.max_history or 50

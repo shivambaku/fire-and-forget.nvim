@@ -109,6 +109,9 @@ local function build_command(mode, prompt, visual_text)
 	return cmd
 end
 
+---@param s string
+---@param max_len number
+---@return string
 local function truncate(s, max_len)
 	if #s > max_len then
 		return s:sub(1, max_len - 3) .. "..."
@@ -116,6 +119,9 @@ local function truncate(s, max_len)
 	return s
 end
 
+---@param obj vim.SystemCompleted
+---@return string response
+---@return "done" | "failed" state
 local function parse_result(obj)
 	local response = obj.stdout or ""
 	if obj.code ~= 0 and response == "" then
@@ -124,6 +130,8 @@ local function parse_result(obj)
 	return response, "done"
 end
 
+---@param id number
+---@param response string
 local function handle_qfix_result(id, response)
 	local qfix_items = qfix.create_qfix_entries(response)
 	requests.set_qfix_items(id, qfix_items)
@@ -132,11 +140,16 @@ local function handle_qfix_result(id, response)
 	end
 end
 
+---@param r hei.Request
+---@return string
 local function format_request(r)
 	local label = state_labels[r.state] or ("[" .. r.state .. "]")
 	return string.format("%s %s: %s", label, r.mode, truncate(r.prompt, 60))
 end
 
+---@param mode "ask" | "vibe" | "tutorial"
+---@param prompt string
+---@param visual_text string[]?
 local function submit_request(mode, prompt, visual_text)
 	local id = requests.add(mode, prompt, visual_text ~= nil)
 	local cmd = build_command(mode, prompt, visual_text)
@@ -161,6 +174,8 @@ local function submit_request(mode, prompt, visual_text)
 	requests.set_handle(id, proc)
 end
 
+---@param id number
+---@param on_back fun()?
 local function select_request(id, on_back)
 	local request = requests.get(id)
 	if not request or not request.response then
@@ -176,11 +191,13 @@ local function select_request(id, on_back)
 	})
 end
 
+---@param id number
 local function cancel_request(id)
 	requests.cancel(id)
 	vim.notify("hei: request cancelled", vim.log.levels.INFO)
 end
 
+---@param restore_cursor number?
 local function open_request_list(restore_cursor)
 	local reqs = requests.list()
 	local items = vim.iter(reqs)

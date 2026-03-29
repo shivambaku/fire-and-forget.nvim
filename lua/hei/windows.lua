@@ -8,14 +8,16 @@ local M = {}
 ---@type hei.Window | nil
 local window_active = nil
 
---- @return number
---- @return number
+---@return number width
+---@return number height
 local function get_ui_dimensions()
 	local ui = vim.api.nvim_list_uis()[1]
 	return ui.width, ui.height
 end
 
---- @return vim.api.keyset.win_config
+---@param width_percentage number
+---@param height_percentage number
+---@return vim.api.keyset.win_config
 local function create_centered_config(width_percentage, height_percentage)
 	local width, height = get_ui_dimensions()
 	local win_width = math.floor(width * width_percentage)
@@ -32,9 +34,9 @@ local function create_centered_config(width_percentage, height_percentage)
 	}
 end
 
---- @param config_func fun(): table
---- @param enter boolean
---- return hei.Window
+---@param config_func fun(): table
+---@param enter boolean
+---@return hei.Window
 local function create_floating_window(config_func, enter)
 	local buffer_id = vim.api.nvim_create_buf(false, true)
 	vim.bo[buffer_id].bufhidden = "wipe"
@@ -78,6 +80,9 @@ vim.api.nvim_create_autocmd("VimResized", {
 ---@field on_submit fun(prompt: string)
 ---@field on_cancel fun()
 
+---@param modes string[]
+---@param opts hei.InputOpts
+---@return hei.Window
 function M.open_input(modes, opts)
 	close_window_active()
 
@@ -156,6 +161,7 @@ end
 ---@field on_cancel fun(id: number)
 
 ---@param opts hei.ListOpts
+---@return hei.Window
 function M.open_list(opts)
 	close_window_active()
 
@@ -227,6 +233,7 @@ end
 ---@field on_back fun() | nil
 
 ---@param opts hei.ResponseOpts
+---@return hei.Window
 function M.open_response(opts)
 	close_window_active()
 
