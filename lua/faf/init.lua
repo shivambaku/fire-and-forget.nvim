@@ -275,6 +275,9 @@ local function open_request_split(id)
 		session_id = request.session_id,
 		started_at = request.started_at,
 		content = request.response,
+		on_reply = function(prompt)
+			submit_followup(id, prompt)
+		end,
 	})
 end
 

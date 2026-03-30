@@ -88,9 +88,18 @@ vim.api.nvim_create_autocmd("VimResized", {
 	end,
 })
 
+---@class faf.SplitOpts
+---@field mode string
+---@field session_id string | nil
+---@field on_reply fun(prompt: string) | nil
+
 ---@param content_lines string[]
+---@param opts faf.SplitOpts?
 ---@return number window_id
-local function create_split_window(content_lines)
+local function create_split_window(content_lines, opts)
+	opts = opts or {}
+	local can_reply = opts.session_id ~= nil
+
 	vim.cmd("rightbelow vsplit")
 	local split_win = vim.api.nvim_get_current_win()
 	local split_buf = vim.api.nvim_create_buf(false, false)
@@ -107,6 +116,18 @@ local function create_split_window(content_lines)
 	vim.keymap.set("n", "q", function()
 		vim.api.nvim_win_close(split_win, false)
 	end, { buffer = split_buf, nowait = true })
+	if can_reply and opts.on_reply then
+		vim.keymap.set("n", "r", function()
+			vim.api.nvim_win_close(split_win, false)
+			M.open_input({ opts.mode }, {
+				mode = opts.mode,
+				visual = false,
+				on_mode_change = function() end,
+				on_submit = opts.on_reply,
+				on_cancel = function() end,
+			})
+		end, { buffer = split_buf, nowait = true })
+	end
 	return split_win
 end
 
@@ -360,7 +381,11 @@ function M.open_response(opts)
 
 	local function open_split()
 		close_window_active()
-		create_split_window(content_lines)
+		create_split_window(content_lines, {
+			mode = opts.mode,
+			session_id = opts.session_id,
+			on_reply = opts.on_reply,
+		})
 	end
 
 	local function reply()
@@ -403,7 +428,11 @@ end
 ---@param opts faf.ResponseOpts
 ---@return number window_id
 function M.open_response_split(opts)
-	return create_split_window(vim.split(opts.content, "\n"))
+	return create_split_window(vim.split(opts.content, "\n"), {
+		mode = opts.mode,
+		session_id = opts.session_id,
+		on_reply = opts.on_reply,
+	})
 end
 
 return M
