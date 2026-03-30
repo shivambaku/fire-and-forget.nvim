@@ -88,6 +88,28 @@ vim.api.nvim_create_autocmd("VimResized", {
 	end,
 })
 
+---@param content_lines string[]
+---@return number window_id
+local function create_split_window(content_lines)
+	vim.cmd("rightbelow vsplit")
+	local split_win = vim.api.nvim_get_current_win()
+	local split_buf = vim.api.nvim_create_buf(false, false)
+	vim.api.nvim_win_set_buf(split_win, split_buf)
+	vim.api.nvim_buf_set_lines(split_buf, 0, -1, false, content_lines)
+	vim.bo[split_buf].buftype = "nofile"
+	vim.bo[split_buf].filetype = "markdown"
+	vim.bo[split_buf].modifiable = false
+	vim.bo[split_buf].buflisted = false
+	vim.bo[split_buf].bufhidden = "wipe"
+	vim.wo[split_win].wrap = true
+	vim.wo[split_win].linebreak = true
+	vim.api.nvim_buf_set_name(split_buf, "faf response")
+	vim.keymap.set("n", "q", function()
+		vim.api.nvim_win_close(split_win, false)
+	end, { buffer = split_buf, nowait = true })
+	return split_win
+end
+
 ---@class faf.InputOpts
 ---@field mode string
 ---@field visual boolean
@@ -164,18 +186,31 @@ function M.open_input(modes, opts)
 end
 
 ---@class faf.ListOpts
----@field items { display: string, id: number, state: string, label: string, mode: string, req_mode: string }[]
+---@field items { display: string, id: number, state: string, label: string, mode: string, req_mode: string, has_qfix: boolean }[]
 ---@field on_select fun(id: number, cursor_pos: number)
 ---@field on_cancel fun(id: number)
+---@field on_split fun(id: number)
 
 ---@param opts faf.ListOpts
 ---@return faf.Window
 function M.open_list(opts)
 	close_window_active()
 
+	local function get_footer_text()
+		if #opts.items == 0 then
+			return "  No requests yet"
+		end
+		local lnum = vim.api.nvim_win_get_cursor(window_active and window_active.window_id or 0)[1] or 1
+		local item = opts.items[lnum]
+		if item and not item.has_qfix then
+			return "  <CR> view  s split  d cancel  q close"
+		end
+		return "  <CR> view  d cancel  q close"
+	end
+
 	local config = function()
 		local config = create_centered_config(0.8, 0.6)
-		config.footer = { { "  <CR> view  d cancel  q close", "Comment" } }
+		config.footer = { { get_footer_text(), "Comment" } }
 		config.footer_pos = "center"
 		return config
 	end
@@ -204,6 +239,12 @@ function M.open_list(opts)
 		end
 	end
 
+	local function update_footer()
+		if window_active and vim.api.nvim_win_is_valid(window_active.window_id) then
+			vim.api.nvim_win_set_config(window_active.window_id, config())
+		end
+	end
+
 	local function select()
 		if #opts.items == 0 then
 			return
@@ -213,6 +254,18 @@ function M.open_list(opts)
 		if item then
 			close_window_active()
 			opts.on_select(item.id, lnum)
+		end
+	end
+
+	local function split_request()
+		if #opts.items == 0 then
+			return
+		end
+		local lnum = vim.api.nvim_win_get_cursor(window.window_id)[1]
+		local item = opts.items[lnum]
+		if item and not item.has_qfix and opts.on_split then
+			close_window_active()
+			opts.on_split(item.id)
 		end
 	end
 
@@ -238,9 +291,16 @@ function M.open_list(opts)
 		end
 	end
 
+	vim.api.nvim_create_autocmd("CursorMoved", {
+		buffer = window.buffer_id,
+		callback = update_footer,
+	})
+
 	vim.keymap.set("n", "-", "<NOP>", { buffer = window.buffer_id })
 
 	vim.keymap.set("n", "<CR>", select, { buffer = window.buffer_id })
+
+	vim.keymap.set("n", "s", split_request, { buffer = window.buffer_id })
 
 	vim.keymap.set("n", "d", cancel_request, { buffer = window.buffer_id })
 
@@ -300,19 +360,7 @@ function M.open_response(opts)
 
 	local function open_split()
 		close_window_active()
-		vim.cmd("rightbelow vsplit")
-		local split_win = vim.api.nvim_get_current_win()
-		local split_buf = vim.api.nvim_create_buf(false, false)
-		vim.api.nvim_win_set_buf(split_win, split_buf)
-		vim.api.nvim_buf_set_lines(split_buf, 0, -1, false, content_lines)
-		vim.bo[split_buf].buftype = "nofile"
-		vim.bo[split_buf].filetype = "markdown"
-		vim.bo[split_buf].modifiable = false
-		vim.bo[split_buf].buflisted = false
-		vim.bo[split_buf].bufhidden = "wipe"
-		vim.wo[split_win].wrap = true
-		vim.wo[split_win].linebreak = true
-		vim.api.nvim_buf_set_name(split_buf, "faf response")
+		create_split_window(content_lines)
 	end
 
 	local function reply()
@@ -350,6 +398,12 @@ function M.open_response(opts)
 	vim.keymap.set("n", "<Esc>", close_window_active, { buffer = window.buffer_id })
 
 	return window
+end
+
+---@param opts faf.ResponseOpts
+---@return number window_id
+function M.open_response_split(opts)
+	return create_split_window(vim.split(opts.content, "\n"))
 end
 
 return M

@@ -257,6 +257,28 @@ local function select_request(id, on_back)
 end
 
 ---@param id number
+local function open_request_split(id)
+	local request = requests.get(id)
+	if not request or not request.response then
+		vim.notify("faf: no response to display", vim.log.levels.WARN)
+		return
+	end
+
+	local has_qfix = request.qfix_items and #request.qfix_items > 0
+	if has_qfix then
+		return
+	end
+
+	windows.open_response_split({
+		id = request.id,
+		mode = request.mode,
+		session_id = request.session_id,
+		started_at = request.started_at,
+		content = request.response,
+	})
+end
+
+---@param id number
 local function cancel_request(id)
 	requests.cancel(id)
 	vim.cmd("redrawstatus")
@@ -269,6 +291,7 @@ local function open_request_list(restore_cursor)
 	local items = vim.iter(reqs)
 		:map(function(r)
 			local display, label, mode_str = format_request(r)
+			local has_qfix = r.qfix_items and #r.qfix_items > 0
 			return {
 				display = display,
 				id = r.id,
@@ -276,6 +299,7 @@ local function open_request_list(restore_cursor)
 				label = label,
 				mode = mode_str,
 				req_mode = r.mode,
+				has_qfix = has_qfix,
 			}
 		end)
 		:totable()
@@ -286,6 +310,9 @@ local function open_request_list(restore_cursor)
 			select_request(id, function()
 				open_request_list(cursor_pos)
 			end)
+		end,
+		on_split = function(id)
+			open_request_split(id)
 		end,
 		on_cancel = cancel_request,
 	})
