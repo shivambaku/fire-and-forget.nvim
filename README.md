@@ -1,6 +1,8 @@
-# faf
+# fire-and-forget.nvim
 
-**Fire and Forget** — a lightweight Neovim plugin for [opencode](https://github.com/sst/opencode) that runs in the background.
+**Fire and Forget** is a lightweight Neovim plugin for [opencode](https://github.com/sst/opencode) that runs in the background.
+
+The repo name is `fire-and-forget.nvim`. The plugin's short runtime name stays `faf`, so you still use `require("faf")` and the `:Faf...` commands.
 
 ## Modes
 
@@ -21,7 +23,7 @@ All modes support visual selection.
 
 ```lua
 {
-  "your-user/faf",
+  "your-user/fire-and-forget.nvim",
   config = function()
     require("faf").setup()
   end,
