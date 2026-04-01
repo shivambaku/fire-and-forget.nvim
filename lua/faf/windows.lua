@@ -362,7 +362,7 @@ function M.open_response(opts)
 		if can_reply then
 			footer_text = footer_text .. "  r reply"
 		end
-		local config = create_centered_config(0.8, 0.6)
+		local config = create_centered_config(0.8, 0.8)
 		config.footer = {
 			{ footer_text, "Comment" },
 		}
