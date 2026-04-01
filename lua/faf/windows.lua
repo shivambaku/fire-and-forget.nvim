@@ -211,6 +211,7 @@ end
 ---@field on_select fun(id: number, cursor_pos: number)
 ---@field on_cancel fun(id: number)
 ---@field on_split fun(id: number)
+---@field on_quickfix fun(id: number)
 
 ---@param opts faf.ListOpts
 ---@return faf.Window
@@ -223,7 +224,10 @@ function M.open_list(opts)
 		end
 		local lnum = vim.api.nvim_win_get_cursor(window_active and window_active.window_id or 0)[1] or 1
 		local item = opts.items[lnum]
-		if item and not item.has_qfix then
+		if item and item.has_qfix then
+			return "  <CR> view  s split  c quickfix  d cancel  q close"
+		end
+		if item then
 			return "  <CR> view  s split  d cancel  q close"
 		end
 		return "  <CR> view  d cancel  q close"
@@ -284,7 +288,7 @@ function M.open_list(opts)
 		end
 		local lnum = vim.api.nvim_win_get_cursor(window.window_id)[1]
 		local item = opts.items[lnum]
-		if item and not item.has_qfix and opts.on_split then
+		if item and opts.on_split then
 			close_window_active()
 			opts.on_split(item.id)
 		end
@@ -312,6 +316,18 @@ function M.open_list(opts)
 		end
 	end
 
+	local function open_quickfix()
+		if #opts.items == 0 then
+			return
+		end
+		local lnum = vim.api.nvim_win_get_cursor(window.window_id)[1]
+		local item = opts.items[lnum]
+		if item and item.has_qfix and opts.on_quickfix then
+			close_window_active()
+			opts.on_quickfix(item.id)
+		end
+	end
+
 	vim.api.nvim_create_autocmd("CursorMoved", {
 		buffer = window.buffer_id,
 		callback = update_footer,
@@ -322,6 +338,8 @@ function M.open_list(opts)
 	vim.keymap.set("n", "<CR>", select, { buffer = window.buffer_id })
 
 	vim.keymap.set("n", "s", split_request, { buffer = window.buffer_id })
+
+	vim.keymap.set("n", "c", open_quickfix, { buffer = window.buffer_id })
 
 	vim.keymap.set("n", "d", cancel_request, { buffer = window.buffer_id })
 

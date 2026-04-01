@@ -237,23 +237,17 @@ local function select_request(id, on_back)
 		return
 	end
 
-	local has_qfix = request.qfix_items and #request.qfix_items > 0
-
-	if has_qfix then
-		windows.open_quickfix(request.qfix_items, "faf [" .. request.mode .. "]")
-	else
-		windows.open_response({
-			id = request.id,
-			mode = request.mode,
-			session_id = request.session_id,
-			started_at = request.started_at,
-			content = request.response,
-			on_back = on_back,
-			on_reply = function(prompt)
-				submit_followup(id, prompt)
-			end,
-		})
-	end
+	windows.open_response({
+		id = request.id,
+		mode = request.mode,
+		session_id = request.session_id,
+		started_at = request.started_at,
+		content = request.response,
+		on_back = on_back,
+		on_reply = function(prompt)
+			submit_followup(id, prompt)
+		end,
+	})
 end
 
 ---@param id number
@@ -261,11 +255,6 @@ local function open_request_split(id)
 	local request = requests.get(id)
 	if not request or not request.response then
 		vim.notify("faf: no response to display", vim.log.levels.WARN)
-		return
-	end
-
-	local has_qfix = request.qfix_items and #request.qfix_items > 0
-	if has_qfix then
 		return
 	end
 
@@ -279,6 +268,23 @@ local function open_request_split(id)
 			submit_followup(id, prompt)
 		end,
 	})
+end
+
+---@param id number
+local function open_request_qfix(id)
+	local request = requests.get(id)
+	if not request then
+		vim.notify("faf: request not found", vim.log.levels.WARN)
+		return
+	end
+
+	local has_qfix = request.qfix_items and #request.qfix_items > 0
+	if not has_qfix then
+		vim.notify("faf: no locations to display", vim.log.levels.WARN)
+		return
+	end
+
+	windows.open_quickfix(request.qfix_items, "faf [" .. request.mode .. "]")
 end
 
 ---@param id number
@@ -316,6 +322,9 @@ local function open_request_list(restore_cursor)
 		end,
 		on_split = function(id)
 			open_request_split(id)
+		end,
+		on_quickfix = function(id)
+			open_request_qfix(id)
 		end,
 		on_cancel = cancel_request,
 	})
