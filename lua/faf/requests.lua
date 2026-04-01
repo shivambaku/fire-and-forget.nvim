@@ -1,11 +1,16 @@
 local M = {}
 
+---@class faf.Message
+---@field role "user" | "assistant"
+---@field content string
+
 ---@class faf.Request
 ---@field id number
 ---@field mode "ask" | "vibe" | "tutorial"
 ---@field prompt string
 ---@field visual boolean
 ---@field state "running" | "done" | "failed" | "cancelled"
+---@field messages faf.Message[]
 ---@field response string | nil
 ---@field started_at number
 ---@field session_id string | nil
@@ -16,6 +21,33 @@ local M = {}
 local requests = {}
 local next_id = 1
 local max_history = 50
+
+---@param messages faf.Message[]
+---@param role "user" | "assistant"
+---@param content string | nil
+local function insert_message(messages, role, content)
+	if not content or content == "" then
+		return
+	end
+
+	table.insert(messages, {
+		role = role,
+		content = content,
+	})
+end
+
+---@param r faf.Request
+---@return boolean
+local function is_valid_request(r)
+	return type(r) == "table"
+		and type(r.id) == "number"
+		and type(r.mode) == "string"
+		and type(r.prompt) == "string"
+		and type(r.visual) == "boolean"
+		and type(r.state) == "string"
+		and type(r.messages) == "table"
+		and type(r.started_at) == "number"
+end
 
 ---@return string
 local function project_key()
@@ -50,6 +82,7 @@ local function save()
 			prompt = r.prompt,
 			visual = r.visual,
 			state = r.state,
+			messages = r.messages,
 			response = r.response,
 			started_at = r.started_at,
 			session_id = r.session_id,
@@ -84,10 +117,15 @@ local function load()
 
 	requests = {}
 	for _, r in ipairs(decoded) do
-		r._handle = nil
-		table.insert(requests, r)
-		if r.id >= next_id then
-			next_id = r.id + 1
+		if is_valid_request(r) then
+			r.qfix_items = r.qfix_items or {}
+			r.response = r.response or nil
+			r.session_id = r.session_id or nil
+			r._handle = nil
+			table.insert(requests, r)
+			if r.id >= next_id then
+				next_id = r.id + 1
+			end
 		end
 	end
 end
@@ -110,6 +148,7 @@ function M.add(mode, prompt, visual)
 		prompt = prompt,
 		visual = visual,
 		state = "running",
+		messages = {},
 		response = nil,
 		started_at = os.time(),
 		session_id = nil,
@@ -188,6 +227,18 @@ function M.set_state(id, state)
 	if r then
 		r.state = state
 	end
+end
+
+---@param id number
+---@param role "user" | "assistant"
+---@param content string
+function M.add_message(id, role, content)
+	local r = M.get(id)
+	if r == nil then
+		return
+	end
+
+	insert_message(r.messages, role, content)
 end
 
 ---@param id number

@@ -78,17 +78,22 @@ local state_labels = {
 ---@param prompt string
 ---@param visual_text string[]?
 ---@param session_id string?
+---@param include_hint boolean?
 ---@return string[]
-local function build_command(mode, prompt, visual_text, session_id)
+local function build_command(mode, prompt, visual_text, session_id, include_hint)
 	local agent = agent_map[mode]
 	local hint = mode_hints[mode]
 	local full_prompt
+	local should_include_hint = include_hint ~= false
 
 	if visual_text then
-		full_prompt = table.concat(visual_text, "\n") .. "\n\n" .. prompt .. "\n\n" .. hint
-		print(full_prompt)
+		full_prompt = table.concat(visual_text, "\n") .. "\n\n" .. prompt
 	else
-		full_prompt = prompt .. "\n\n" .. hint
+		full_prompt = prompt
+	end
+
+	if should_include_hint then
+		full_prompt = full_prompt .. "\n\n" .. hint
 	end
 
 	local cmd = { "opencode", "run", "--format", "json", "--agent", agent }
@@ -164,8 +169,13 @@ end
 ---@param visual_text string[]?
 local function submit_request(mode, prompt, visual_text)
 	local id = requests.add(mode, prompt, visual_text ~= nil)
+	local user_message = prompt
+	if visual_text then
+		user_message = table.concat(visual_text, "\n") .. "\n\n" .. prompt
+	end
+	requests.add_message(id, "user", user_message)
 	vim.cmd("redrawstatus")
-	local cmd = build_command(mode, prompt, visual_text, nil)
+	local cmd = build_command(mode, prompt, visual_text, nil, true)
 
 	local proc = vim.system(cmd, { text = true }, function(obj)
 		vim.schedule(function()
@@ -179,6 +189,7 @@ local function submit_request(mode, prompt, visual_text)
 				handle_qfix_result(id, response)
 			end
 			requests.set_session_id(id, session_id)
+			requests.add_message(id, "assistant", response)
 			requests.finish(id, response, state)
 			vim.cmd("redrawstatus")
 			local req = requests.get(id)
@@ -203,10 +214,11 @@ local function submit_followup(id, prompt)
 		return
 	end
 
+	requests.add_message(id, "user", prompt)
 	requests.set_state_running(id)
 	vim.cmd("redrawstatus")
 
-	local cmd = build_command(req.mode, prompt, nil, req.session_id)
+	local cmd = build_command(req.mode, prompt, nil, req.session_id, false)
 
 	local proc = vim.system(cmd, { text = true }, function(obj)
 		vim.schedule(function()
@@ -219,6 +231,7 @@ local function submit_followup(id, prompt)
 			if state == "done" then
 				handle_qfix_result(id, response)
 			end
+			requests.add_message(id, "assistant", response)
 			requests.finish(id, response, state)
 			vim.cmd("redrawstatus")
 			vim.notify("faf ✓ follow-up complete", vim.log.levels.INFO)
@@ -242,7 +255,7 @@ local function select_request(id, on_back)
 		mode = request.mode,
 		session_id = request.session_id,
 		started_at = request.started_at,
-		content = request.response,
+		messages = request.messages,
 		on_back = on_back,
 		on_reply = function(prompt)
 			submit_followup(id, prompt)
@@ -263,7 +276,7 @@ local function open_request_split(id)
 		mode = request.mode,
 		session_id = request.session_id,
 		started_at = request.started_at,
-		content = request.response,
+		messages = request.messages,
 		on_reply = function(prompt)
 			submit_followup(id, prompt)
 		end,
@@ -390,8 +403,8 @@ function M.setup(opts)
 			cmd_input(nil)
 		end, { desc = "faf: input" })
 
-		vim.keymap.set("v", km.input, function()
-			local lines = vim.fn.getregion(vim.fn.getpos("'<"), vim.fn.getpos("'>"), { type = vim.fn.visualmode() })
+		vim.keymap.set("x", km.input, function()
+			local lines = vim.fn.getregion(vim.fn.getpos("v"), vim.fn.getpos("."), { type = vim.fn.mode() })
 			local t = {}
 			for i, l in ipairs(lines) do
 				t[i] = l

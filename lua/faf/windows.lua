@@ -93,6 +93,38 @@ vim.api.nvim_create_autocmd("VimResized", {
 ---@field session_id string | nil
 ---@field on_reply fun(prompt: string) | nil
 
+---@param messages faf.Message[]
+---@return string[]
+local function format_messages(messages)
+	local lines = {}
+	local rendered_count = 0
+
+	for i, message in ipairs(messages) do
+		if i == 1 and message.role == "user" then
+			goto continue
+		end
+
+		if rendered_count > 0 then
+			table.insert(lines, "")
+		end
+
+		local label = message.role == "user" and "User" or "Assistant"
+		table.insert(lines, "## " .. label)
+
+		local content_lines = vim.split(message.content, "\n", { plain = true })
+		vim.list_extend(lines, content_lines)
+		rendered_count = rendered_count + 1
+
+		::continue::
+	end
+
+	if #lines == 0 then
+		return { "No response yet" }
+	end
+
+	return lines
+end
+
 ---@param content_lines string[]
 ---@param opts faf.SplitOpts?
 ---@return number window_id
@@ -363,7 +395,7 @@ end
 ---@field mode string
 ---@field session_id string | nil
 ---@field started_at number
----@field content string
+---@field messages faf.Message[]
 ---@field on_back fun() | nil
 ---@field on_reply fun(prompt: string) | nil
 
@@ -393,7 +425,7 @@ function M.open_response(opts)
 	vim.bo[window.buffer_id].filetype = "markdown"
 	vim.wo[window.window_id].linebreak = true
 
-	local content_lines = vim.split(opts.content, "\n")
+	local content_lines = format_messages(opts.messages)
 	vim.api.nvim_buf_set_lines(window.buffer_id, 0, -1, false, content_lines)
 	vim.bo[window.buffer_id].modifiable = false
 
@@ -446,7 +478,7 @@ end
 ---@param opts faf.ResponseOpts
 ---@return number window_id
 function M.open_response_split(opts)
-	return create_split_window(vim.split(opts.content, "\n"), {
+	return create_split_window(format_messages(opts.messages), {
 		mode = opts.mode,
 		session_id = opts.session_id,
 		on_reply = opts.on_reply,
