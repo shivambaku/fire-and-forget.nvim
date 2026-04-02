@@ -13,6 +13,7 @@ local M = {}
 ---@field messages faf.Message[]
 ---@field response string | nil
 ---@field started_at number
+---@field updated_at number
 ---@field session_id string | nil
 ---@field qfix_items {filename: string, lnum: number, col: number, text: string}[]
 ---@field _handle vim.SystemObj | nil
@@ -21,6 +22,12 @@ local M = {}
 local requests = {}
 local next_id = 1
 local max_history = 50
+
+---@return number
+local function now()
+	local seconds, microseconds = vim.uv.gettimeofday()
+	return seconds + (microseconds / 1e6)
+end
 
 ---@param messages faf.Message[]
 ---@param role "user" | "assistant"
@@ -47,6 +54,7 @@ local function is_valid_request(r)
 		and type(r.state) == "string"
 		and type(r.messages) == "table"
 		and type(r.started_at) == "number"
+		and (r.updated_at == nil or type(r.updated_at) == "number")
 end
 
 ---@return string
@@ -85,6 +93,7 @@ local function save()
 			messages = r.messages,
 			response = r.response,
 			started_at = r.started_at,
+			updated_at = r.updated_at,
 			session_id = r.session_id,
 			qfix_items = r.qfix_items,
 		})
@@ -120,6 +129,7 @@ local function load()
 		if is_valid_request(r) then
 			r.qfix_items = r.qfix_items or {}
 			r.response = r.response or nil
+			r.updated_at = r.updated_at or r.started_at
 			r.session_id = r.session_id or nil
 			r._handle = nil
 			table.insert(requests, r)
@@ -142,6 +152,7 @@ end
 ---@param visual boolean
 ---@return number id
 function M.add(mode, prompt, visual)
+	local updated_at = now()
 	local r = {
 		id = next_id,
 		mode = mode,
@@ -150,7 +161,8 @@ function M.add(mode, prompt, visual)
 		state = "running",
 		messages = {},
 		response = nil,
-		started_at = os.time(),
+		started_at = math.floor(updated_at),
+		updated_at = updated_at,
 		session_id = nil,
 		qfix_items = {},
 		_handle = nil,
@@ -178,7 +190,13 @@ function M.list()
 		table.insert(sorted, r)
 	end
 	table.sort(sorted, function(a, b)
-		return a.started_at > b.started_at
+		if a.updated_at ~= b.updated_at then
+			return a.updated_at > b.updated_at
+		end
+		if a.started_at ~= b.started_at then
+			return a.started_at > b.started_at
+		end
+		return a.id > b.id
 	end)
 	return sorted
 end
@@ -239,6 +257,7 @@ function M.add_message(id, role, content)
 	end
 
 	insert_message(r.messages, role, content)
+	r.updated_at = now()
 end
 
 ---@param id number
@@ -261,6 +280,7 @@ function M.finish(id, response, state)
 	end
 	r.response = response
 	r.state = state
+	r.updated_at = now()
 	r._handle = nil
 	save()
 end
@@ -277,6 +297,7 @@ function M.cancel(id, should_save)
 		pcall(r._handle.kill, r._handle, 15)
 	end
 	r.state = "cancelled"
+	r.updated_at = now()
 	r._handle = nil
 	if should_save ~= false then
 		save()
