@@ -118,12 +118,47 @@ local function truncate(s, max_len)
 	return s
 end
 
+local permission_required_message =
+	"Permission required: OpenCode auto-rejected a tool request in fire-and-forget mode."
+
+---@param err string?
+---@return boolean
+local function is_permission_tool_error(err)
+	if type(err) ~= "string" then
+		return false
+	end
+
+	local lowered = err:lower()
+	return lowered:find("rejected permission", 1, true) ~= nil
+		or lowered:find("user rejected permission", 1, true) ~= nil
+		or (lowered:find("permission to use", 1, true) ~= nil and lowered:find("tool call", 1, true) ~= nil)
+end
+
+---@param stderr string
+---@return boolean
+local function is_permission_auto_reject(stderr)
+	local lowered = stderr:lower()
+	return lowered:find("permission requested", 1, true) ~= nil and lowered:find("auto-reject", 1, true) ~= nil
+end
+
+---@param response string
+---@return string
+local function format_permission_required_response(response)
+	if response == "" then
+		return permission_required_message
+	end
+
+	return permission_required_message .. "\n\n" .. response
+end
+
 ---@param stdout string
 ---@return string session_id
 ---@return string response
+---@return boolean permission_rejected
 local function parse_json_result(stdout)
 	local session_id = ""
 	local response_parts = {}
+	local permission_rejected = false
 
 	for line in stdout:gmatch("[^\n]+") do
 		local ok, decoded = pcall(vim.json.decode, line)
@@ -134,10 +169,48 @@ local function parse_json_result(stdout)
 			if decoded.type == "text" and decoded.part and decoded.part.text then
 				table.insert(response_parts, decoded.part.text)
 			end
+			if
+				decoded.type == "tool_use"
+				and decoded.part
+				and decoded.part.state
+				and decoded.part.state.status == "error"
+				and is_permission_tool_error(decoded.part.state.error)
+			then
+				permission_rejected = true
+			end
 		end
 	end
 
-	return session_id, table.concat(response_parts, "\n")
+	return session_id, table.concat(response_parts, "\n"), permission_rejected
+end
+
+---@param obj vim.SystemCompleted
+---@return string session_id
+---@return string response
+---@return "done" | "failed" state
+local function parse_command_result(obj)
+	local session_id, response, permission_rejected = parse_json_result(obj.stdout or "")
+	if permission_rejected then
+		return session_id, format_permission_required_response(response), "failed"
+	end
+	if is_permission_auto_reject(obj.stderr or "") then
+		return session_id, format_permission_required_response(response), "failed"
+	end
+	if obj.code ~= 0 and response == "" then
+		return session_id, "Error: exit code " .. obj.code .. "\n" .. (obj.stderr or ""), "failed"
+	end
+	return session_id, response, "done"
+end
+
+---@param state "done" | "failed"
+---@return string symbol
+---@return integer level
+local function completion_status(state)
+	if state == "done" then
+		return "✓", vim.log.levels.INFO
+	end
+
+	return "✗", vim.log.levels.ERROR
 end
 
 ---@param id number
@@ -148,6 +221,32 @@ local function handle_qfix_result(id, response)
 	if #qfix_items > 0 then
 		vim.notify("faf: " .. #qfix_items .. " locations found", vim.log.levels.INFO)
 	end
+end
+
+---@param id number
+---@param cmd string[]
+---@param opts { set_session_id?: boolean, notify: fun(state: "done" | "failed", req: faf.Request) }
+local function run_request_command(id, cmd, opts)
+	local proc = vim.system(cmd, { text = true }, function(obj)
+		vim.schedule(function()
+			local session_id, response, state = parse_command_result(obj)
+			if state == "done" then
+				handle_qfix_result(id, response)
+			end
+			if opts.set_session_id then
+				requests.set_session_id(id, session_id)
+			end
+			requests.add_message(id, "assistant", response)
+			requests.finish(id, response, state)
+			vim.cmd("redrawstatus")
+			local req = requests.get(id)
+			if req then
+				opts.notify(state, req)
+			end
+		end)
+	end)
+
+	requests.set_handle(id, proc)
 end
 
 ---@param r faf.Request
@@ -180,32 +279,14 @@ local function submit_request(mode, prompt, visual_text)
 	vim.cmd("redrawstatus")
 	local cmd = build_command(mode, prompt, visual_text, nil, true)
 
-	local proc = vim.system(cmd, { text = true }, function(obj)
-		vim.schedule(function()
-			local session_id, response = parse_json_result(obj.stdout or "")
-			local state = "done"
-			if obj.code ~= 0 and response == "" then
-				response = "Error: exit code " .. obj.code .. "\n" .. (obj.stderr or "")
-				state = "failed"
-			end
-			if state == "done" then
-				handle_qfix_result(id, response)
-			end
-			requests.set_session_id(id, session_id)
-			requests.add_message(id, "assistant", response)
-			requests.finish(id, response, state)
-			vim.cmd("redrawstatus")
-			local req = requests.get(id)
-			if req then
-				local symbol = state == "done" and "✓" or "✗"
-				local level = state == "done" and vim.log.levels.INFO or vim.log.levels.ERROR
-				local prompt_short = truncate(req.prompt, 40)
-				vim.notify("faf " .. symbol .. " " .. req.mode .. ": " .. prompt_short, level)
-			end
-		end)
-	end)
-
-	requests.set_handle(id, proc)
+	run_request_command(id, cmd, {
+		set_session_id = true,
+		notify = function(state, req)
+			local symbol, level = completion_status(state)
+			local prompt_short = truncate(req.prompt, 40)
+			vim.notify("faf " .. symbol .. " " .. req.mode .. ": " .. prompt_short, level)
+		end,
+	})
 end
 
 ---@param id number
@@ -223,31 +304,18 @@ local function submit_followup(id, prompt)
 
 	local cmd = build_command(req.mode, prompt, nil, req.session_id, false)
 
-	local proc = vim.system(cmd, { text = true }, function(obj)
-		vim.schedule(function()
-			local _, response = parse_json_result(obj.stdout or "")
-			local state = "done"
-			if obj.code ~= 0 and response == "" then
-				response = "Error: exit code " .. obj.code .. "\n" .. (obj.stderr or "")
-				state = "failed"
-			end
-			if state == "done" then
-				handle_qfix_result(id, response)
-			end
-			requests.add_message(id, "assistant", response)
-			requests.finish(id, response, state)
-			vim.cmd("redrawstatus")
-			vim.notify("faf ✓ follow-up complete", vim.log.levels.INFO)
-		end)
-	end)
-
-	requests.set_handle(id, proc)
+	run_request_command(id, cmd, {
+		notify = function(state)
+			local symbol, level = completion_status(state)
+			vim.notify("faf " .. symbol .. " follow-up complete", level)
+		end,
+	})
 end
+
+local open_request_qfix
 
 ---@param id number
 ---@param on_back fun()?
-local open_request_qfix
-
 local function select_request(id, on_back)
 	local request = requests.get(id)
 	if not request or not request.response then
