@@ -14,6 +14,7 @@ local M = {}
 ---@field response string | nil
 ---@field started_at number
 ---@field updated_at number
+---@field unseen boolean
 ---@field session_id string | nil
 ---@field qfix_items {filename: string, lnum: number, col: number, text: string}[]
 ---@field _handle vim.SystemObj | nil
@@ -55,7 +56,8 @@ local function is_valid_request(r)
 		and type(r.messages) == "table"
 		and type(r.started_at) == "number"
 		and (r.updated_at == nil or type(r.updated_at) == "number")
-end
+		and (r.unseen == nil or type(r.unseen) == "boolean")
+	end
 
 ---@return string
 local function project_key()
@@ -94,6 +96,7 @@ local function save()
 			response = r.response,
 			started_at = r.started_at,
 			updated_at = r.updated_at,
+			unseen = r.unseen,
 			session_id = r.session_id,
 			qfix_items = r.qfix_items,
 		})
@@ -130,6 +133,7 @@ local function load()
 			r.qfix_items = r.qfix_items or {}
 			r.response = r.response or nil
 			r.updated_at = r.updated_at or r.started_at
+			r.unseen = r.unseen == true
 			r.session_id = r.session_id or nil
 			r._handle = nil
 			table.insert(requests, r)
@@ -163,6 +167,7 @@ function M.add(mode, prompt, visual)
 		response = nil,
 		started_at = math.floor(updated_at),
 		updated_at = updated_at,
+		unseen = false,
 		session_id = nil,
 		qfix_items = {},
 		_handle = nil,
@@ -234,6 +239,7 @@ function M.set_state_running(id)
 	local r = M.get(id)
 	if r then
 		r.state = "running"
+		r.unseen = false
 		r._handle = nil
 	end
 end
@@ -258,6 +264,35 @@ function M.add_message(id, role, content)
 
 	insert_message(r.messages, role, content)
 	r.updated_at = now()
+	if role == "assistant" then
+		r.unseen = true
+	end
+end
+
+---@param id number
+---@return boolean changed
+function M.mark_seen(id)
+	local r = M.get(id)
+	if r == nil or not r.unseen then
+		return false
+	end
+
+	r.unseen = false
+	save()
+	return true
+end
+
+---@param id number
+---@return boolean changed
+function M.mark_unseen(id)
+	local r = M.get(id)
+	if r == nil or r.state == "running" or r.response == nil or r.unseen then
+		return false
+	end
+
+	r.unseen = true
+	save()
+	return true
 end
 
 ---@param id number
@@ -281,6 +316,7 @@ function M.finish(id, response, state)
 	r.response = response
 	r.state = state
 	r.updated_at = now()
+	r.unseen = true
 	r._handle = nil
 	save()
 end
@@ -298,6 +334,7 @@ function M.cancel(id, should_save)
 	end
 	r.state = "cancelled"
 	r.updated_at = now()
+	r.unseen = false
 	r._handle = nil
 	if should_save ~= false then
 		save()

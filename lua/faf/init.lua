@@ -154,14 +154,17 @@ end
 ---@return string
 ---@return string state_label
 ---@return string mode_str
+---@return boolean unseen
 local function format_request(r)
 	local label = state_labels[r.state] or ("[" .. r.state .. "]")
 	local prompt_clean = r.prompt:gsub("\n", " "):gsub("%s+", " ")
 	local mode_str = r.mode
+	local unseen = r.unseen == true and r.state ~= "running"
+	local unseen_marker = unseen and "*" or " "
 	if r.qfix_items and #r.qfix_items > 0 then
 		mode_str = r.mode .. ":" .. #r.qfix_items
 	end
-	return string.format("%-11s %-9s     %s", label, mode_str, prompt_clean), label, mode_str
+	return string.format("%s %-11s %-9s     %s", unseen_marker, label, mode_str, prompt_clean), label, mode_str, unseen
 end
 
 ---@param mode "ask" | "vibe" | "tutorial"
@@ -252,6 +255,7 @@ local function select_request(id, on_back)
 		return
 	end
 	local has_qfix = request.qfix_items and #request.qfix_items > 0
+	requests.mark_seen(id)
 
 	windows.open_response({
 		id = request.id,
@@ -277,6 +281,7 @@ local function open_request_split(id)
 		return
 	end
 	local has_qfix = request.qfix_items and #request.qfix_items > 0
+	requests.mark_seen(id)
 
 	windows.open_response_split({
 		id = request.id,
@@ -306,6 +311,7 @@ open_request_qfix = function(id)
 		vim.notify("faf: no locations to display", vim.log.levels.WARN)
 		return
 	end
+	requests.mark_seen(id)
 
 	windows.open_quickfix(request.qfix_items, "faf [" .. request.mode .. "]")
 end
@@ -322,8 +328,9 @@ local function open_request_list(restore_cursor)
 	local reqs = requests.list()
 	local items = vim.iter(reqs)
 		:map(function(r)
-			local display, label, mode_str = format_request(r)
+			local display, label, mode_str, unseen = format_request(r)
 			local has_qfix = r.qfix_items and #r.qfix_items > 0
+			local can_open = r.response ~= nil
 			return {
 				display = display,
 				id = r.id,
@@ -332,6 +339,8 @@ local function open_request_list(restore_cursor)
 				mode = mode_str,
 				req_mode = r.mode,
 				has_qfix = has_qfix,
+				can_open = can_open,
+				unseen = unseen,
 			}
 		end)
 		:totable()
@@ -348,6 +357,9 @@ local function open_request_list(restore_cursor)
 		end,
 		on_quickfix = function(id)
 			open_request_qfix(id)
+		end,
+		on_unread = function(id)
+			return requests.mark_unseen(id)
 		end,
 		on_cancel = cancel_request,
 	})

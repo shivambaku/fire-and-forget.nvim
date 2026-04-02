@@ -23,6 +23,8 @@ local state_hl = {
 	cancelled = "Comment",
 }
 
+local unseen_hl = "DiagnosticInfo"
+
 ---@return number width
 ---@return number height
 local function get_ui_dimensions()
@@ -243,16 +245,44 @@ function M.open_input(modes, opts)
 end
 
 ---@class faf.ListOpts
----@field items { display: string, id: number, state: string, label: string, mode: string, req_mode: string, has_qfix: boolean }[]
+---@field items { display: string, id: number, state: string, label: string, mode: string, req_mode: string, has_qfix: boolean, can_open: boolean, unseen: boolean }[]
 ---@field on_select fun(id: number, cursor_pos: number)
 ---@field on_cancel fun(id: number)
 ---@field on_split fun(id: number)
 ---@field on_quickfix fun(id: number)
+---@field on_unread fun(id: number): boolean
 
 ---@param opts faf.ListOpts
 ---@return faf.Window
 function M.open_list(opts)
 	close_window_active()
+	local window
+
+	local function can_mark_unread(item)
+		return item ~= nil and item.can_open and item.state ~= "running" and not item.unseen
+	end
+
+	local function apply_item_highlights(lnum, item)
+		vim.api.nvim_buf_clear_namespace(window.buffer_id, ns, lnum - 1, lnum)
+		if item.unseen then
+			vim.hl.range(window.buffer_id, ns, unseen_hl, { lnum - 1, 0 }, { lnum - 1, 1 }, {})
+		end
+		local sh = state_hl[item.state]
+		if sh then
+			vim.hl.range(window.buffer_id, ns, sh, { lnum - 1, 2 }, { lnum - 1, 13 }, {})
+		end
+		local mh = mode_hl[item.req_mode]
+		if mh then
+			vim.hl.range(window.buffer_id, ns, mh, { lnum - 1, 13 }, { lnum - 1, 23 }, {})
+		end
+	end
+
+	local function render_item(lnum, item)
+		vim.bo[window.buffer_id].modifiable = true
+		vim.api.nvim_buf_set_lines(window.buffer_id, lnum - 1, lnum, false, { item.display })
+		vim.bo[window.buffer_id].modifiable = false
+		apply_item_highlights(lnum, item)
+	end
 
 	local function get_footer_text()
 		if #opts.items == 0 then
@@ -260,13 +290,26 @@ function M.open_list(opts)
 		end
 		local lnum = vim.api.nvim_win_get_cursor(window_active and window_active.window_id or 0)[1] or 1
 		local item = opts.items[lnum]
-		if item and item.has_qfix then
-			return "  <CR> view  s split  c quickfix  d cancel  q close"
+		if not item then
+			return "  q close"
 		end
-		if item then
-			return "  <CR> view  s split  d cancel  q close"
+
+		local actions = {}
+		if item.can_open then
+			table.insert(actions, "<CR> view")
+			table.insert(actions, "s split")
 		end
-		return "  <CR> view  d cancel  q close"
+		if item.has_qfix then
+			table.insert(actions, "c quickfix")
+		end
+		if can_mark_unread(item) then
+			table.insert(actions, "u unread")
+		end
+		if item.state == "running" then
+			table.insert(actions, "d cancel")
+		end
+		table.insert(actions, "q close")
+		return "  " .. table.concat(actions, "  ")
 	end
 
 	local config = function()
@@ -276,7 +319,7 @@ function M.open_list(opts)
 		return config
 	end
 
-	local window = create_floating_window(config, true)
+	window = create_floating_window(config, true)
 	vim.bo[window.buffer_id].buftype = "nofile"
 	vim.wo[window.window_id].cursorline = true
 	vim.wo[window.window_id].number = false
@@ -290,14 +333,7 @@ function M.open_list(opts)
 	vim.bo[window.buffer_id].modifiable = false
 
 	for i, item in ipairs(opts.items) do
-		local sh = state_hl[item.state]
-		if sh then
-			vim.hl.range(window.buffer_id, ns, sh, { i - 1, 0 }, { i - 1, 11 }, {})
-		end
-		local mh = mode_hl[item.req_mode]
-		if mh then
-			vim.hl.range(window.buffer_id, ns, mh, { i - 1, 11 }, { i - 1, 21 }, {})
-		end
+		apply_item_highlights(i, item)
 	end
 
 	local function update_footer()
@@ -339,16 +375,29 @@ function M.open_list(opts)
 		if item and item.state == "running" then
 			opts.on_cancel(item.id)
 			item.state = "cancelled"
+			item.unseen = false
 			item.label = "[cancelled]"
-			item.display = item.display:gsub("^%[running%]", "[cancelled]")
-			vim.bo[window.buffer_id].modifiable = true
-			vim.api.nvim_buf_set_lines(window.buffer_id, lnum - 1, lnum, false, { item.display })
-			vim.bo[window.buffer_id].modifiable = false
-			vim.hl.range(window.buffer_id, ns, state_hl["cancelled"], { lnum - 1, 0 }, { lnum - 1, 11 }, {})
-			local mh = mode_hl[item.req_mode]
-			if mh then
-				vim.hl.range(window.buffer_id, ns, mh, { lnum - 1, 11 }, { lnum - 1, 21 }, {})
+			item.display = item.display:gsub("^(..)%[running%]", "%1[cancelled]")
+			render_item(lnum, item)
+			update_footer()
+		end
+	end
+
+	local function mark_unread()
+		if #opts.items == 0 then
+			return
+		end
+		local lnum = vim.api.nvim_win_get_cursor(window.window_id)[1]
+		local item = opts.items[lnum]
+		if item and can_mark_unread(item) and opts.on_unread then
+			local changed = opts.on_unread(item.id)
+			if not changed then
+				return
 			end
+			item.unseen = true
+			item.display = "*" .. item.display:sub(2)
+			render_item(lnum, item)
+			update_footer()
 		end
 	end
 
@@ -378,6 +427,8 @@ function M.open_list(opts)
 	vim.keymap.set("n", "c", open_quickfix, { buffer = window.buffer_id })
 
 	vim.keymap.set("n", "d", cancel_request, { buffer = window.buffer_id })
+
+	vim.keymap.set("n", "u", mark_unread, { buffer = window.buffer_id })
 
 	vim.keymap.set("n", "q", close_window_active, { buffer = window.buffer_id, nowait = true })
 

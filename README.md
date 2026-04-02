@@ -54,6 +54,8 @@ Set `keymaps = false` to disable all; set individual keys to `false` to disable 
 | `:FafList`   | Open request list   |
 | `:FafCancel` | Cancel all requests |
 
+In `:FafList`, a leading `*` marks a request with a new result you have not opened yet. Press `u` to mark the selected request unread again.
+
 ## Related
 
 - [opencode](https://github.com/sst/opencode) — The CLI tool
