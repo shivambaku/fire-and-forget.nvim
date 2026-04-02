@@ -243,12 +243,15 @@ end
 
 ---@param id number
 ---@param on_back fun()?
+local open_request_qfix
+
 local function select_request(id, on_back)
 	local request = requests.get(id)
 	if not request or not request.response then
 		vim.notify("faf: no response to display", vim.log.levels.WARN)
 		return
 	end
+	local has_qfix = request.qfix_items and #request.qfix_items > 0
 
 	windows.open_response({
 		id = request.id,
@@ -257,6 +260,9 @@ local function select_request(id, on_back)
 		started_at = request.started_at,
 		messages = request.messages,
 		on_back = on_back,
+		on_quickfix = has_qfix and function()
+			open_request_qfix(id)
+		end or nil,
 		on_reply = function(prompt)
 			submit_followup(id, prompt)
 		end,
@@ -270,6 +276,7 @@ local function open_request_split(id)
 		vim.notify("faf: no response to display", vim.log.levels.WARN)
 		return
 	end
+	local has_qfix = request.qfix_items and #request.qfix_items > 0
 
 	windows.open_response_split({
 		id = request.id,
@@ -277,6 +284,9 @@ local function open_request_split(id)
 		session_id = request.session_id,
 		started_at = request.started_at,
 		messages = request.messages,
+		on_quickfix = has_qfix and function()
+			open_request_qfix(id)
+		end or nil,
 		on_reply = function(prompt)
 			submit_followup(id, prompt)
 		end,
@@ -284,7 +294,7 @@ local function open_request_split(id)
 end
 
 ---@param id number
-local function open_request_qfix(id)
+open_request_qfix = function(id)
 	local request = requests.get(id)
 	if not request then
 		vim.notify("faf: request not found", vim.log.levels.WARN)

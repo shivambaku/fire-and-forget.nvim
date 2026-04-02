@@ -92,6 +92,7 @@ vim.api.nvim_create_autocmd("VimResized", {
 ---@field mode string
 ---@field session_id string | nil
 ---@field on_reply fun(prompt: string) | nil
+---@field on_quickfix fun() | nil
 
 ---@param messages faf.Message[]
 ---@return string[]
@@ -159,6 +160,9 @@ local function create_split_window(content_lines, opts)
 				on_cancel = function() end,
 			})
 		end, { buffer = split_buf, nowait = true })
+	end
+	if opts.on_quickfix then
+		vim.keymap.set("n", "c", opts.on_quickfix, { buffer = split_buf })
 	end
 	return split_win
 end
@@ -398,6 +402,7 @@ end
 ---@field messages faf.Message[]
 ---@field on_back fun() | nil
 ---@field on_reply fun(prompt: string) | nil
+---@field on_quickfix fun() | nil
 
 ---@param opts faf.ResponseOpts
 ---@return faf.Window
@@ -409,6 +414,9 @@ function M.open_response(opts)
 
 	local config = function()
 		local footer_text = "  [" .. opts.mode .. "] " .. time .. "  q back  s split"
+		if opts.on_quickfix then
+			footer_text = footer_text .. "  c quickfix"
+		end
 		if can_reply then
 			footer_text = footer_text .. "  r reply"
 		end
@@ -435,6 +443,7 @@ function M.open_response(opts)
 			mode = opts.mode,
 			session_id = opts.session_id,
 			on_reply = opts.on_reply,
+			on_quickfix = opts.on_quickfix,
 		})
 	end
 
@@ -468,6 +477,10 @@ function M.open_response(opts)
 
 	vim.keymap.set("n", "s", open_split, { buffer = window.buffer_id })
 
+	if opts.on_quickfix then
+		vim.keymap.set("n", "c", opts.on_quickfix, { buffer = window.buffer_id })
+	end
+
 	vim.keymap.set("n", "r", reply, { buffer = window.buffer_id })
 
 	vim.keymap.set("n", "<Esc>", close_window_active, { buffer = window.buffer_id })
@@ -482,6 +495,7 @@ function M.open_response_split(opts)
 		mode = opts.mode,
 		session_id = opts.session_id,
 		on_reply = opts.on_reply,
+		on_quickfix = opts.on_quickfix,
 	})
 end
 
