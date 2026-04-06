@@ -14,10 +14,13 @@ The repo name is `fire-and-forget.nvim`. The plugin's short runtime name stays `
 
 All modes support visual selection.
 
+In the input window, press `Ctrl-V` to attach the current clipboard image. The option appears only when a supported clipboard backend is available: `osascript` on macOS, `wl-paste` on Wayland, or `xclip` on X11.
+
 ## Requirements
 
 - Neovim 0.10+
 - [opencode](https://github.com/sst/opencode) CLI in PATH
+- For image paste support: `wl-clipboard` on Wayland or `xclip` on X11
 
 ## Installation
 

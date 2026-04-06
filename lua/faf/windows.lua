@@ -1,5 +1,7 @@
 local M = {}
 
+local attachment_utils = require("faf.attachments")
+
 ---@class faf.Window
 ---@field window_id number
 ---@field buffer_id number
@@ -9,6 +11,9 @@ local M = {}
 local window_active = nil
 
 local ns = vim.api.nvim_create_namespace("faf")
+local input_ns = vim.api.nvim_create_namespace("faf-input")
+
+local attachment_chip_hl = "Search"
 
 local mode_hl = {
 	ask = "DiagnosticWarn",
@@ -94,7 +99,7 @@ vim.api.nvim_create_autocmd("VimResized", {
 ---@field mode string
 ---@field session_id string | nil
 ---@field cursor_lnum number | nil
----@field on_reply fun(prompt: string) | nil
+---@field on_reply fun(prompt: string, attachments: faf.Attachment[]) | nil
 ---@field on_quickfix fun() | nil
 
 ---@param messages faf.Message[]
@@ -186,8 +191,12 @@ end
 ---@field mode string
 ---@field visual boolean
 ---@field on_mode_change fun(new_mode: string)
----@field on_submit fun(prompt: string)
+---@field on_submit fun(prompt: string, attachments: faf.Attachment[])
 ---@field on_cancel fun()
+
+---@class faf.InputAttachment : faf.Attachment
+---@field extmark_id number
+---@field chip_text string
 
 ---@param modes string[]
 ---@param opts faf.InputOpts
@@ -195,6 +204,15 @@ end
 function M.open_input(modes, opts)
 	close_window_active()
 
+	local window
+	---@type faf.InputAttachment[]
+	local input_attachments = {}
+	local can_attach_clipboard_image = attachment_utils.supports_clipboard_image()
+	local next_image_index = 1
+	local last_cursor = { row = 0, col = 0 }
+	local moving_cursor = false
+	local suppress_attachment_sync = false
+	local config
 	local mode_index = 1
 	for i, m in ipairs(modes) do
 		if m == opts.mode then
@@ -203,46 +221,398 @@ function M.open_input(modes, opts)
 		end
 	end
 
-	local config = function()
+	---@param row_a number
+	---@param col_a number
+	---@param row_b number
+	---@param col_b number
+	---@return integer
+	local function compare_positions(row_a, col_a, row_b, col_b)
+		if row_a ~= row_b then
+			return row_a < row_b and -1 or 1
+		end
+		if col_a == col_b then
+			return 0
+		end
+		return col_a < col_b and -1 or 1
+	end
+
+	---@param attachment faf.InputAttachment
+	---@return { start_row: number, start_col: number, end_row: number, end_col: number } | nil
+	local function get_attachment_range(attachment)
+		local extmark = vim.api.nvim_buf_get_extmark_by_id(window.buffer_id, input_ns, attachment.extmark_id, { details = true })
+		if #extmark == 0 then
+			return nil
+		end
+
+		local details = extmark[3] or {}
+		return {
+			start_row = extmark[1],
+			start_col = extmark[2],
+			end_row = details.end_row or extmark[1],
+			end_col = details.end_col or extmark[2],
+		}
+	end
+
+	---@param row number
+	---@param col number
+	---@param include_start boolean
+	---@param include_end boolean
+	---@return integer? index
+	---@return { start_row: number, start_col: number, end_row: number, end_col: number }? range
+	local function find_attachment_at_position(row, col, include_start, include_end)
+		for index, attachment in ipairs(input_attachments) do
+			local range = get_attachment_range(attachment)
+			if range then
+				local start_cmp = compare_positions(row, col, range.start_row, range.start_col)
+				local end_cmp = compare_positions(row, col, range.end_row, range.end_col)
+				local after_start = include_start and start_cmp >= 0 or start_cmp > 0
+				local before_end = include_end and end_cmp <= 0 or end_cmp < 0
+				if after_start and before_end then
+					return index, range
+				end
+			end
+		end
+	end
+
+	local function update_window()
+		if window and vim.api.nvim_win_is_valid(window.window_id) then
+			vim.api.nvim_win_set_config(window.window_id, config())
+		end
+	end
+
+	---@param key string
+	local function feed_key(key)
+		vim.schedule(function()
+			vim.api.nvim_feedkeys(vim.keycode(key), "nt", false)
+		end)
+	end
+
+	---@param action fun()
+	local function schedule_input_action(action)
+		vim.schedule(function()
+			if not window or not vim.api.nvim_win_is_valid(window.window_id) then
+				return
+			end
+			if not vim.api.nvim_buf_is_valid(window.buffer_id) then
+				return
+			end
+			action()
+		end)
+	end
+
+	---@param index integer
+	---@param range { start_row: number, start_col: number, end_row: number, end_col: number }?
+	---@param keep_text boolean?
+	local function remove_attachment(index, range, keep_text)
+		local attachment = input_attachments[index]
+		if not attachment then
+			return
+		end
+
+		range = range or get_attachment_range(attachment)
+		if range and not keep_text then
+			suppress_attachment_sync = true
+			vim.api.nvim_buf_set_text(
+				window.buffer_id,
+				range.start_row,
+				range.start_col,
+				range.end_row,
+				range.end_col,
+				{ "" }
+			)
+			suppress_attachment_sync = false
+		end
+
+		pcall(vim.api.nvim_buf_del_extmark, window.buffer_id, input_ns, attachment.extmark_id)
+		attachment_utils.cleanup({ attachment })
+		table.remove(input_attachments, index)
+		update_window()
+	end
+
+	local function sync_attachments_from_buffer()
+		if suppress_attachment_sync then
+			return false
+		end
+
+		local changed = false
+		local index = 1
+
+		while index <= #input_attachments do
+			local attachment = input_attachments[index]
+			local range = get_attachment_range(attachment)
+			local chip_text
+			if range and range.start_row == range.end_row then
+				local line = vim.api.nvim_buf_get_lines(window.buffer_id, range.start_row, range.start_row + 1, false)[1]
+				if line and range.start_col >= 0 and range.end_col >= range.start_col and range.end_col <= #line then
+					local ok, text = pcall(vim.api.nvim_buf_get_text,
+						window.buffer_id,
+						range.start_row,
+						range.start_col,
+						range.end_row,
+						range.end_col,
+						{}
+					)
+					if ok then
+						chip_text = text[1]
+					end
+				end
+			end
+			if not range or range.start_row ~= range.end_row or chip_text ~= attachment.chip_text then
+				remove_attachment(index, range, true)
+				changed = true
+			else
+				index = index + 1
+			end
+		end
+
+		return changed
+	end
+
+	---@return faf.Attachment[]
+	local function copy_attachments()
+		local attachments = {}
+
+		for _, attachment in ipairs(input_attachments) do
+			table.insert(attachments, {
+				path = attachment.path,
+				name = attachment.name,
+				kind = attachment.kind,
+				temporary = attachment.temporary,
+			})
+		end
+
+		return attachments
+	end
+
+	---@return string
+	local function build_prompt()
+		local lines = vim.api.nvim_buf_get_lines(window.buffer_id, 0, -1, false)
+		local ranges = {}
+
+		for _, attachment in ipairs(input_attachments) do
+			local range = get_attachment_range(attachment)
+			if range then
+				table.insert(ranges, range)
+			end
+		end
+
+		table.sort(ranges, function(a, b)
+			return compare_positions(a.start_row, a.start_col, b.start_row, b.start_col) > 0
+		end)
+
+		for _, range in ipairs(ranges) do
+			local line_index = range.start_row + 1
+			local line = lines[line_index] or ""
+			lines[line_index] = line:sub(1, range.start_col) .. line:sub(range.end_col + 1)
+		end
+
+		return vim.trim(table.concat(lines, "\n"))
+	end
+
+	---@param include_start boolean
+	---@param include_end boolean
+	---@return boolean
+	local function has_attachment_at_cursor(include_start, include_end)
+		local cursor = vim.api.nvim_win_get_cursor(window.window_id)
+		local row = cursor[1] - 1
+		local col = cursor[2]
+		local index = find_attachment_at_position(row, col, include_start, include_end)
+		return index ~= nil
+	end
+
+	---@return boolean removed
+	local function remove_attachment_before_cursor()
+		sync_attachments_from_buffer()
+		local cursor = vim.api.nvim_win_get_cursor(window.window_id)
+		local row = cursor[1] - 1
+		local col = cursor[2]
+		local index, range = find_attachment_at_position(row, col, false, true)
+		if not index or not range then
+			return false
+		end
+
+		remove_attachment(index, range)
+		moving_cursor = true
+		vim.api.nvim_win_set_cursor(window.window_id, { range.start_row + 1, range.start_col })
+		moving_cursor = false
+		last_cursor = { row = range.start_row, col = range.start_col }
+		return true
+	end
+
+	---@return boolean removed
+	local function remove_attachment_at_cursor()
+		sync_attachments_from_buffer()
+		local cursor = vim.api.nvim_win_get_cursor(window.window_id)
+		local row = cursor[1] - 1
+		local col = cursor[2]
+		local index, range = find_attachment_at_position(row, col, true, false)
+		if not index or not range then
+			return false
+		end
+
+		remove_attachment(index, range)
+		moving_cursor = true
+		vim.api.nvim_win_set_cursor(window.window_id, { range.start_row + 1, range.start_col })
+		moving_cursor = false
+		last_cursor = { row = range.start_row, col = range.start_col }
+		return true
+	end
+
+	local function normalize_cursor_position()
+		if moving_cursor then
+			return
+		end
+
+		sync_attachments_from_buffer()
+
+		local cursor = vim.api.nvim_win_get_cursor(window.window_id)
+		local row = cursor[1] - 1
+		local col = cursor[2]
+		local prev_row = last_cursor.row
+		local prev_col = last_cursor.col
+		local index, range = find_attachment_at_position(row, col, false, false)
+		if index and range then
+			local target_row = range.end_row
+			local target_col = range.end_col
+			if compare_positions(row, col, prev_row, prev_col) < 0 then
+				target_row = range.start_row
+				target_col = range.start_col
+			end
+
+			moving_cursor = true
+			vim.api.nvim_win_set_cursor(window.window_id, { target_row + 1, target_col })
+			moving_cursor = false
+			row = target_row
+			col = target_col
+		end
+
+		last_cursor = { row = row, col = col }
+	end
+
+	local function attachment_footer_text()
+		local count = #input_attachments
+		if count == 0 then
+			return nil
+		end
+
+		if count == 1 then
+			return "  [1 image]"
+		end
+
+		return string.format("  [%d images]", count)
+	end
+
+	config = function()
 		local mode = modes[mode_index]
 		local label = opts.visual and "visual " .. mode or mode
 
 		local config = create_centered_config(0.6, 0.20)
-		config.footer = { { "[" .. label .. "]  :w submit  q/Esc cancel  <Tab> mode", mode_hl[mode] or "Comment" } }
+		local footer = {
+			{ "[" .. label .. "]  :w submit  q cancel  <Tab> mode", mode_hl[mode] or "Comment" },
+		}
+		if can_attach_clipboard_image then
+			table.insert(footer, { "  <C-v> image", "Comment" })
+		end
+		local attachment_text = attachment_footer_text()
+		if attachment_text then
+			table.insert(footer, { attachment_text, "DiagnosticInfo" })
+		end
+		config.footer = footer
 		config.footer_pos = "center"
 		return config
 	end
 
-	local window = create_floating_window(config, true)
+	window = create_floating_window(config, true)
 	vim.api.nvim_buf_set_name(window.buffer_id, "faf://input")
 	vim.bo[window.buffer_id].buftype = "acwrite"
 	vim.cmd("startinsert")
+	normalize_cursor_position()
 
 	vim.api.nvim_create_autocmd("BufWriteCmd", {
 		buffer = window.buffer_id,
 		callback = function()
-			local lines = vim.api.nvim_buf_get_lines(window.buffer_id, 0, -1, false)
-			local prompt = vim.trim(table.concat(lines, "\n"))
+			sync_attachments_from_buffer()
+			local prompt = build_prompt()
 			if prompt == "" then
+				if #input_attachments > 0 then
+					vim.notify("faf: add a prompt before submitting", vim.log.levels.WARN)
+				end
 				return
 			end
+			local attachments = copy_attachments()
+			input_attachments = {}
 			close_window_active()
 			vim.cmd("stopinsert")
-			opts.on_submit(prompt)
+			opts.on_submit(prompt, attachments)
 		end,
 	})
 
 	local function cycle_mode(delta)
 		mode_index = ((mode_index - 1 + delta) % #modes) + 1
-		vim.api.nvim_win_set_config(window.window_id, config())
+		update_window()
 		opts.on_mode_change(modes[mode_index])
 	end
 
 	local function close()
 		close_window_active()
 		vim.cmd("stopinsert")
+		attachment_utils.cleanup(input_attachments)
 		opts.on_cancel()
 	end
+
+	local function attach_clipboard_image()
+		local attachment, err, err_code = attachment_utils.capture_clipboard_image()
+		if not attachment then
+			if attachment_utils.is_no_image_error(err_code) then
+				return
+			end
+			vim.notify("faf: " .. (err or "could not attach clipboard image"), vim.log.levels.WARN)
+			return
+		end
+
+		local cursor = vim.api.nvim_win_get_cursor(window.window_id)
+		local row = cursor[1] - 1
+		local col = cursor[2]
+		local chip_text = string.format("[Image %d] ", next_image_index)
+		next_image_index = next_image_index + 1
+
+		suppress_attachment_sync = true
+		vim.api.nvim_buf_set_text(window.buffer_id, row, col, row, col, { chip_text })
+		local extmark_id = vim.api.nvim_buf_set_extmark(window.buffer_id, input_ns, row, col, {
+			end_row = row,
+			end_col = col + #chip_text,
+			hl_group = attachment_chip_hl,
+			right_gravity = true,
+			end_right_gravity = false,
+		})
+		suppress_attachment_sync = false
+
+		table.insert(input_attachments, {
+			path = attachment.path,
+			name = attachment.name,
+			kind = attachment.kind,
+			temporary = attachment.temporary,
+			extmark_id = extmark_id,
+			chip_text = chip_text,
+		})
+
+		moving_cursor = true
+		vim.api.nvim_win_set_cursor(window.window_id, { row + 1, col + #chip_text })
+		moving_cursor = false
+		last_cursor = { row = row, col = col + #chip_text }
+		update_window()
+		vim.notify("faf: attached " .. attachment.name, vim.log.levels.INFO)
+	end
+
+	vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+		buffer = window.buffer_id,
+		callback = sync_attachments_from_buffer,
+	})
+
+	vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
+		buffer = window.buffer_id,
+		callback = normalize_cursor_position,
+	})
 
 	vim.keymap.set({ "i", "n" }, "<Tab>", function()
 		cycle_mode(1)
@@ -252,7 +622,52 @@ function M.open_input(modes, opts)
 		cycle_mode(-1)
 	end, { buffer = window.buffer_id })
 
+	vim.keymap.set("i", "<BS>", function()
+		if has_attachment_at_cursor(false, true) then
+			schedule_input_action(remove_attachment_before_cursor)
+			return
+		end
+		feed_key("<BS>")
+	end, { buffer = window.buffer_id })
+
+	vim.keymap.set("i", "<C-h>", function()
+		if has_attachment_at_cursor(false, true) then
+			schedule_input_action(remove_attachment_before_cursor)
+			return
+		end
+		feed_key("<C-h>")
+	end, { buffer = window.buffer_id })
+
+	vim.keymap.set("i", "<Del>", function()
+		if has_attachment_at_cursor(true, false) then
+			schedule_input_action(remove_attachment_at_cursor)
+			return
+		end
+		feed_key("<Del>")
+	end, { buffer = window.buffer_id })
+
+	vim.keymap.set("n", "x", function()
+		if has_attachment_at_cursor(true, false) then
+			schedule_input_action(remove_attachment_at_cursor)
+			return
+		end
+		feed_key("x")
+	end, { buffer = window.buffer_id })
+
+	vim.keymap.set("n", "X", function()
+		if has_attachment_at_cursor(false, true) then
+			schedule_input_action(remove_attachment_before_cursor)
+			return
+		end
+		feed_key("X")
+	end, { buffer = window.buffer_id })
+
+	if can_attach_clipboard_image then
+		vim.keymap.set({ "i", "n" }, "<C-v>", attach_clipboard_image, { buffer = window.buffer_id })
+	end
+
 	vim.keymap.set("n", "q", close, { buffer = window.buffer_id, nowait = true })
+	vim.keymap.set("n", "<Esc>", close, { buffer = window.buffer_id, nowait = true })
 
 	return window
 end
@@ -465,7 +880,7 @@ end
 ---@field started_at number
 ---@field messages faf.Message[]
 ---@field on_back fun() | nil
----@field on_reply fun(prompt: string) | nil
+---@field on_reply fun(prompt: string, attachments: faf.Attachment[]) | nil
 ---@field on_quickfix fun() | nil
 
 ---@param opts faf.ResponseOpts

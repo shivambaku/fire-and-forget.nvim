@@ -1,6 +1,7 @@
 local windows = require("faf.windows")
 local requests = require("faf.requests")
 local qfix = require("faf.qfix")
+local attachment_utils = require("faf.attachments")
 
 local M = {}
 
@@ -77,10 +78,11 @@ local state_labels = {
 ---@param mode string
 ---@param prompt string
 ---@param visual_text string[]?
+---@param attachments faf.Attachment[]?
 ---@param session_id string?
 ---@param include_hint boolean?
 ---@return string[]
-local function build_command(mode, prompt, visual_text, session_id, include_hint)
+local function build_command(mode, prompt, visual_text, attachments, session_id, include_hint)
 	local agent = agent_map[mode]
 	local hint = mode_hints[mode]
 	local full_prompt
@@ -103,9 +105,49 @@ local function build_command(mode, prompt, visual_text, session_id, include_hint
 	if options.model then
 		vim.list_extend(cmd, { "-m", options.model })
 	end
-	table.insert(cmd, full_prompt)
+	for _, attachment in ipairs(attachments or {}) do
+		vim.list_extend(cmd, { "-f", attachment.path })
+	end
+	vim.list_extend(cmd, { "--", full_prompt })
 
 	return cmd
+end
+
+---@param prompt string
+---@param visual_text string[]?
+---@param attachments faf.Attachment[]?
+---@return string
+local function format_user_message(prompt, visual_text, attachments)
+	local parts = {}
+
+	if visual_text then
+		table.insert(parts, table.concat(visual_text, "\n"))
+	end
+
+	local attachment_lines = attachment_utils.summary_lines(attachments)
+	if #attachment_lines > 0 then
+		table.insert(parts, table.concat(attachment_lines, "\n"))
+	end
+
+	table.insert(parts, prompt)
+
+	return table.concat(parts, "\n\n")
+end
+
+---@param attachments faf.Attachment[]?
+---@return faf.StoredAttachment[]
+local function to_stored_attachments(attachments)
+	local stored = {}
+
+	for _, attachment in ipairs(attachments or {}) do
+		table.insert(stored, {
+			path = attachment.temporary and nil or attachment.path,
+			name = attachment.name,
+			kind = attachment.kind,
+		})
+	end
+
+	return stored
 end
 
 ---@param s string
@@ -225,10 +267,15 @@ end
 
 ---@param id number
 ---@param cmd string[]
----@param opts { set_session_id?: boolean, notify: fun(state: "done" | "failed", req: faf.Request) }
+---@param opts { set_session_id?: boolean, attachments?: faf.Attachment[], notify: fun(state: "done" | "failed", req: faf.Request) }
 local function run_request_command(id, cmd, opts)
 	local proc = vim.system(cmd, { text = true }, function(obj)
 		vim.schedule(function()
+			attachment_utils.cleanup(opts.attachments)
+			local req = requests.get(id)
+			if not req or req.state == "cancelled" then
+				return
+			end
 			local session_id, response, state = parse_command_result(obj)
 			if state == "done" then
 				handle_qfix_result(id, response)
@@ -239,7 +286,7 @@ local function run_request_command(id, cmd, opts)
 			requests.add_message(id, "assistant", response)
 			requests.finish(id, response, state)
 			vim.cmd("redrawstatus")
-			local req = requests.get(id)
+			req = requests.get(id)
 			if req then
 				opts.notify(state, req)
 			end
@@ -256,7 +303,7 @@ end
 ---@return boolean unseen
 local function format_request(r)
 	local label = state_labels[r.state] or ("[" .. r.state .. "]")
-	local prompt_clean = r.prompt:gsub("\n", " "):gsub("%s+", " ")
+	local prompt_clean = (r.prompt .. attachment_utils.prompt_suffix(r.attachments)):gsub("\n", " "):gsub("%s+", " ")
 	local mode_str = r.mode
 	local unseen = r.unseen == true and r.state ~= "running"
 	local unseen_marker = unseen and "*" or " "
@@ -269,18 +316,18 @@ end
 ---@param mode "ask" | "vibe" | "tutorial"
 ---@param prompt string
 ---@param visual_text string[]?
-local function submit_request(mode, prompt, visual_text)
-	local id = requests.add(mode, prompt, visual_text ~= nil)
-	local user_message = prompt
-	if visual_text then
-		user_message = table.concat(visual_text, "\n") .. "\n\n" .. prompt
-	end
+
+---@param attachments faf.Attachment[]?
+local function submit_request(mode, prompt, visual_text, attachments)
+	local id = requests.add(mode, prompt, visual_text ~= nil, to_stored_attachments(attachments), attachments)
+	local user_message = format_user_message(prompt, visual_text, attachments)
 	requests.add_message(id, "user", user_message)
 	vim.cmd("redrawstatus")
-	local cmd = build_command(mode, prompt, visual_text, nil, true)
+	local cmd = build_command(mode, prompt, visual_text, attachments, nil, true)
 
 	run_request_command(id, cmd, {
 		set_session_id = true,
+		attachments = attachments,
 		notify = function(state, req)
 			local symbol, level = completion_status(state)
 			local prompt_short = truncate(req.prompt, 40)
@@ -291,20 +338,22 @@ end
 
 ---@param id number
 ---@param prompt string
-local function submit_followup(id, prompt)
+---@param attachments faf.Attachment[]?
+local function submit_followup(id, prompt, attachments)
 	local req = requests.get(id)
 	if not req or not req.session_id then
 		vim.notify("faf: no session to continue", vim.log.levels.WARN)
 		return
 	end
 
-	requests.add_message(id, "user", prompt)
-	requests.set_state_running(id)
+	requests.add_message(id, "user", format_user_message(prompt, nil, attachments))
+	requests.set_state_running(id, attachments)
 	vim.cmd("redrawstatus")
 
-	local cmd = build_command(req.mode, prompt, nil, req.session_id, false)
+	local cmd = build_command(req.mode, prompt, nil, attachments, req.session_id, false)
 
 	run_request_command(id, cmd, {
+		attachments = attachments,
 		notify = function(state)
 			local symbol, level = completion_status(state)
 			vim.notify("faf " .. symbol .. " follow-up complete", level)
@@ -335,8 +384,8 @@ local function select_request(id, on_back)
 		on_quickfix = has_qfix and function()
 			open_request_qfix(id)
 		end or nil,
-		on_reply = function(prompt)
-			submit_followup(id, prompt)
+		on_reply = function(prompt, attachments)
+			submit_followup(id, prompt, attachments)
 		end,
 	})
 end
@@ -360,8 +409,8 @@ local function open_request_split(id)
 		on_quickfix = has_qfix and function()
 			open_request_qfix(id)
 		end or nil,
-		on_reply = function(prompt)
-			submit_followup(id, prompt)
+		on_reply = function(prompt, attachments)
+			submit_followup(id, prompt, attachments)
 		end,
 	})
 end
@@ -386,7 +435,10 @@ end
 
 ---@param id number
 local function cancel_request(id)
+	local req = requests.get(id)
+	local attachments = req and req._attachments or nil
 	requests.cancel(id)
+	attachment_utils.cleanup(attachments)
 	vim.cmd("redrawstatus")
 	vim.notify("faf: request cancelled", vim.log.levels.INFO)
 end
@@ -447,8 +499,8 @@ local function cmd_input(visual_text)
 		on_mode_change = function(mode_new)
 			mode_current = mode_new
 		end,
-		on_submit = function(prompt)
-			submit_request(mode_current, prompt, visual_text)
+		on_submit = function(prompt, attachments)
+			submit_request(mode_current, prompt, visual_text, attachments)
 		end,
 		on_cancel = function() end,
 	})
@@ -459,7 +511,16 @@ local function cmd_list()
 end
 
 local function cmd_cancel()
+	local attachments = {}
+	for _, req in ipairs(requests.list()) do
+		if req.state == "running" then
+			table.insert(attachments, req._attachments)
+		end
+	end
 	requests.cancel_all()
+	for _, req_attachments in ipairs(attachments) do
+		attachment_utils.cleanup(req_attachments)
+	end
 	vim.cmd("redrawstatus")
 	vim.notify("faf: all requests cancelled", vim.log.levels.INFO)
 end

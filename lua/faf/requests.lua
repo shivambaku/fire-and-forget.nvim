@@ -1,14 +1,26 @@
 local M = {}
 
+---@class faf.Attachment
+---@field path string
+---@field name string
+---@field kind "image"
+---@field temporary boolean
+
 ---@class faf.Message
 ---@field role "user" | "assistant"
 ---@field content string
+
+---@class faf.StoredAttachment
+---@field path string | nil
+---@field name string
+---@field kind string
 
 ---@class faf.Request
 ---@field id number
 ---@field mode "ask" | "vibe" | "tutorial"
 ---@field prompt string
 ---@field visual boolean
+---@field attachments faf.StoredAttachment[]
 ---@field state "running" | "done" | "failed" | "cancelled"
 ---@field messages faf.Message[]
 ---@field response string | nil
@@ -17,6 +29,7 @@ local M = {}
 ---@field unseen boolean
 ---@field session_id string | nil
 ---@field qfix_items {filename: string, lnum: number, col: number, text: string}[]
+---@field _attachments faf.Attachment[]
 ---@field _handle vim.SystemObj | nil
 
 ---@type faf.Request[]
@@ -52,6 +65,7 @@ local function is_valid_request(r)
 		and type(r.mode) == "string"
 		and type(r.prompt) == "string"
 		and type(r.visual) == "boolean"
+		and (r.attachments == nil or type(r.attachments) == "table")
 		and type(r.state) == "string"
 		and type(r.messages) == "table"
 		and type(r.started_at) == "number"
@@ -91,6 +105,7 @@ local function save()
 			mode = r.mode,
 			prompt = r.prompt,
 			visual = r.visual,
+			attachments = r.attachments,
 			state = r.state,
 			messages = r.messages,
 			response = r.response,
@@ -130,11 +145,13 @@ local function load()
 	requests = {}
 	for _, r in ipairs(decoded) do
 		if is_valid_request(r) then
+			r.attachments = r.attachments or {}
 			r.qfix_items = r.qfix_items or {}
 			r.response = r.response or nil
 			r.updated_at = r.updated_at or r.started_at
 			r.unseen = r.unseen == true
 			r.session_id = r.session_id or nil
+			r._attachments = {}
 			r._handle = nil
 			table.insert(requests, r)
 			if r.id >= next_id then
@@ -154,14 +171,17 @@ end
 ---@param mode "ask" | "vibe" | "tutorial"
 ---@param prompt string
 ---@param visual boolean
+---@param attachments faf.StoredAttachment[]?
+---@param runtime_attachments faf.Attachment[]?
 ---@return number id
-function M.add(mode, prompt, visual)
+function M.add(mode, prompt, visual, attachments, runtime_attachments)
 	local updated_at = now()
 	local r = {
 		id = next_id,
 		mode = mode,
 		prompt = prompt,
 		visual = visual,
+		attachments = vim.deepcopy(attachments or {}),
 		state = "running",
 		messages = {},
 		response = nil,
@@ -170,6 +190,7 @@ function M.add(mode, prompt, visual)
 		unseen = false,
 		session_id = nil,
 		qfix_items = {},
+		_attachments = vim.deepcopy(runtime_attachments or {}),
 		_handle = nil,
 	}
 	table.insert(requests, r)
@@ -235,11 +256,13 @@ function M.set_session_id(id, session_id)
 end
 
 ---@param id number
-function M.set_state_running(id)
+---@param attachments faf.Attachment[]?
+function M.set_state_running(id, attachments)
 	local r = M.get(id)
 	if r then
 		r.state = "running"
 		r.unseen = false
+		r._attachments = vim.deepcopy(attachments or {})
 		r._handle = nil
 	end
 end
@@ -317,6 +340,7 @@ function M.finish(id, response, state)
 	r.state = state
 	r.updated_at = now()
 	r.unseen = true
+	r._attachments = {}
 	r._handle = nil
 	save()
 end
@@ -335,6 +359,7 @@ function M.cancel(id, should_save)
 	r.state = "cancelled"
 	r.updated_at = now()
 	r.unseen = false
+	r._attachments = {}
 	r._handle = nil
 	if should_save ~= false then
 		save()
