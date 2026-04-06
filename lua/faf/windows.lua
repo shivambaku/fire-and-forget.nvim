@@ -93,14 +93,17 @@ vim.api.nvim_create_autocmd("VimResized", {
 ---@class faf.SplitOpts
 ---@field mode string
 ---@field session_id string | nil
+---@field cursor_lnum number | nil
 ---@field on_reply fun(prompt: string) | nil
 ---@field on_quickfix fun() | nil
 
 ---@param messages faf.Message[]
----@return string[]
+---@return string[] lines
+---@return number | nil last_assistant_lnum
 local function format_messages(messages)
 	local lines = {}
 	local rendered_count = 0
+	local last_assistant_lnum = nil
 
 	for i, message in ipairs(messages) do
 		if i == 1 and message.role == "user" then
@@ -112,6 +115,9 @@ local function format_messages(messages)
 		end
 
 		local label = message.role == "user" and "User" or "Assistant"
+		if message.role == "assistant" then
+			last_assistant_lnum = #lines + 1
+		end
 		table.insert(lines, "## " .. label)
 
 		local content_lines = vim.split(message.content, "\n", { plain = true })
@@ -122,10 +128,10 @@ local function format_messages(messages)
 	end
 
 	if #lines == 0 then
-		return { "No response yet" }
+		return { "No response yet" }, nil
 	end
 
-	return lines
+	return lines, last_assistant_lnum
 end
 
 ---@param content_lines string[]
@@ -147,6 +153,13 @@ local function create_split_window(content_lines, opts)
 	vim.bo[split_buf].bufhidden = "wipe"
 	vim.wo[split_win].wrap = true
 	vim.wo[split_win].linebreak = true
+	vim.wo[split_win].scrolloff = 0
+	if opts.cursor_lnum then
+		vim.api.nvim_win_set_cursor(split_win, { opts.cursor_lnum, 0 })
+		vim.api.nvim_win_call(split_win, function()
+			vim.cmd("normal! zt")
+		end)
+	end
 	vim.api.nvim_buf_set_name(split_buf, "faf response")
 	vim.keymap.set("n", "q", function()
 		vim.api.nvim_win_close(split_win, false)
@@ -484,7 +497,7 @@ function M.open_response(opts)
 	vim.bo[window.buffer_id].filetype = "markdown"
 	vim.wo[window.window_id].linebreak = true
 
-	local content_lines = format_messages(opts.messages)
+	local content_lines, split_cursor_lnum = format_messages(opts.messages)
 	vim.api.nvim_buf_set_lines(window.buffer_id, 0, -1, false, content_lines)
 	vim.bo[window.buffer_id].modifiable = false
 
@@ -493,6 +506,7 @@ function M.open_response(opts)
 		create_split_window(content_lines, {
 			mode = opts.mode,
 			session_id = opts.session_id,
+			cursor_lnum = split_cursor_lnum,
 			on_reply = opts.on_reply,
 			on_quickfix = opts.on_quickfix,
 		})
@@ -542,9 +556,11 @@ end
 ---@param opts faf.ResponseOpts
 ---@return number window_id
 function M.open_response_split(opts)
-	return create_split_window(format_messages(opts.messages), {
+	local content_lines, cursor_lnum = format_messages(opts.messages)
+	return create_split_window(content_lines, {
 		mode = opts.mode,
 		session_id = opts.session_id,
+		cursor_lnum = cursor_lnum,
 		on_reply = opts.on_reply,
 		on_quickfix = opts.on_quickfix,
 	})
