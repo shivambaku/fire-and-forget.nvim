@@ -1,11 +1,5 @@
 local M = {}
 
----@class faf.Attachment
----@field path string
----@field name string
----@field kind "image"
----@field temporary boolean
-
 ---@class faf.Message
 ---@field role "user" | "assistant"
 ---@field content string
@@ -71,11 +65,12 @@ local function is_valid_request(r)
 		and type(r.started_at) == "number"
 		and (r.updated_at == nil or type(r.updated_at) == "number")
 		and (r.unseen == nil or type(r.unseen) == "boolean")
-	end
+end
 
 ---@return string
 local function project_key()
-	return vim.fn.fnamemodify(vim.fn.getcwd(), ":p:h"):gsub("[^a-zA-Z0-9]", "_"):sub(1, -2)
+	local key = vim.fn.fnamemodify(vim.fn.getcwd(), ":p:h"):gsub("[^a-zA-Z0-9]", "_"):sub(1, -2)
+	return key
 end
 
 ---@return string
@@ -264,15 +259,6 @@ function M.set_state_running(id, attachments)
 		r.unseen = false
 		r._attachments = vim.deepcopy(attachments or {})
 		r._handle = nil
-	end
-end
-
----@param id number
----@param state "running" | "done" | "failed" | "cancelled"
-function M.set_state(id, state)
-	local r = M.get(id)
-	if r then
-		r.state = state
 	end
 end
 

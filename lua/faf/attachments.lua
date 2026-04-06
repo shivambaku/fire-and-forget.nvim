@@ -41,7 +41,8 @@ local error_codes = {
 ---@param value string
 ---@return string
 local function escape_applescript_string(value)
-	return value:gsub("\\", "\\\\"):gsub('"', '\\"')
+	local escaped = value:gsub("\\", "\\\\"):gsub('"', '\\"')
+	return escaped
 end
 
 ---@param path string
@@ -223,7 +224,9 @@ local function capture_with_command(command, mime, backend_name)
 		return nil, string.format("%s timed out while reading the clipboard image", backend_name), error_codes.timeout
 	end
 	if result.code ~= 0 then
-		return nil, command_failure_message(backend_name, "read the clipboard image", result), error_codes.backend_failed
+		return nil,
+			command_failure_message(backend_name, "read the clipboard image", result),
+			error_codes.backend_failed
 	end
 
 	local stdout = normalize_output(result.stdout)
@@ -235,7 +238,6 @@ local function capture_with_command(command, mime, backend_name)
 end
 
 ---@class faf.ClipboardBackend
----@field name string
 ---@field supported fun(): boolean
 ---@field capture fun(): faf.Attachment | nil, string?
 
@@ -303,7 +305,7 @@ local function supports_wayland_clipboard_image()
 		and vim.fn.executable("wl-paste") == 1
 end
 
----@return string[]
+---@return string[] | nil
 local function list_wayland_clipboard_mimes()
 	return list_clipboard_mimes({ "wl-paste", "--list-types" }, "wl-paste")
 end
@@ -339,7 +341,7 @@ local function supports_x11_clipboard_image()
 		and vim.fn.executable("xclip") == 1
 end
 
----@return string[]
+---@return string[] | nil
 local function list_x11_clipboard_mimes()
 	return list_clipboard_mimes({ "xclip", "-selection", "clipboard", "-t", "TARGETS", "-o" }, "xclip")
 end
@@ -370,17 +372,14 @@ end
 ---@type faf.ClipboardBackend[]
 local clipboard_backends = {
 	{
-		name = "macos",
 		supported = supports_macos_clipboard_image,
 		capture = capture_macos_clipboard_image,
 	},
 	{
-		name = "wayland",
 		supported = supports_wayland_clipboard_image,
 		capture = capture_wayland_clipboard_image,
 	},
 	{
-		name = "x11",
 		supported = supports_x11_clipboard_image,
 		capture = capture_x11_clipboard_image,
 	},

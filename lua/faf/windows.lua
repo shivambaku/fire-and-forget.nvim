@@ -217,31 +217,18 @@ function M.open_input(modes, opts)
 
 	---@return faf.Attachment[]
 	local function copy_attachments()
-		local attachments = {}
-
-		for _, attachment in ipairs(input_attachments) do
-			table.insert(attachments, {
-				path = attachment.path,
-				name = attachment.name,
-				kind = attachment.kind,
-				temporary = attachment.temporary,
-			})
-		end
-
-		return attachments
+		return vim.deepcopy(input_attachments)
 	end
 
-	---@return boolean
 	local function remove_last_attachment()
 		local attachment = table.remove(input_attachments)
 		if not attachment then
-			return false
+			return
 		end
 
 		attachment_utils.cleanup({ attachment })
 		update_window()
 		vim.notify("faf: removed " .. attachment.name, vim.log.levels.INFO)
-		return true
 	end
 
 	local function attachment_footer_text()
@@ -346,7 +333,6 @@ function M.open_input(modes, opts)
 	end
 
 	vim.keymap.set("n", "q", close, { buffer = window.buffer_id, nowait = true })
-	vim.keymap.set("n", "<Esc>", close, { buffer = window.buffer_id, nowait = true })
 
 	return window
 end

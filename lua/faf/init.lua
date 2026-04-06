@@ -316,7 +316,6 @@ end
 ---@param mode "ask" | "vibe" | "tutorial"
 ---@param prompt string
 ---@param visual_text string[]?
-
 ---@param attachments faf.Attachment[]?
 local function submit_request(mode, prompt, visual_text, attachments)
 	local id = requests.add(mode, prompt, visual_text ~= nil, to_stored_attachments(attachments), attachments)
