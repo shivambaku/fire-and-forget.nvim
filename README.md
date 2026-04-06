@@ -14,7 +14,7 @@ The repo name is `fire-and-forget.nvim`. The plugin's short runtime name stays `
 
 All modes support visual selection.
 
-In the input window, press `Ctrl-V` to attach the current clipboard image. The option appears only when a supported clipboard backend is available: `osascript` on macOS, `wl-paste` on Wayland, or `xclip` on X11.
+In the input window, press `Ctrl-V` to attach the current clipboard image and `Ctrl-X` to remove the most recently attached image. These keymaps are available only when a supported clipboard backend is available: `osascript` on macOS, `wl-paste` on Wayland, or `xclip` on X11.
 
 ## Requirements
 

@@ -249,15 +249,13 @@ function M.open_input(modes, opts)
 		local label = opts.visual and "visual " .. mode or mode
 
 		local config = create_centered_config(0.6, 0.20)
-		local footer = {
-			{ "[" .. label .. "]  :w submit  q cancel  <Tab> mode", mode_hl[mode] or "Comment" },
+		config.title = {
+			{ " [" .. label .. "] ", mode_hl[mode] or "Comment" },
 		}
-		if can_attach_clipboard_image then
-			table.insert(footer, { "  <C-v> image", "Comment" })
-		end
-		if #input_attachments > 0 then
-			table.insert(footer, { "  <C-x> remove-last", "Comment" })
-		end
+		config.title_pos = "center"
+		local footer = {
+			{ "  :w submit  q close  <Tab> mode", mode_hl[mode] or "Comment" },
+		}
 		local attachment_text = attachment_footer_text()
 		if attachment_text then
 			table.insert(footer, { attachment_text, "DiagnosticInfo" })
