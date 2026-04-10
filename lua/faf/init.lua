@@ -7,6 +7,7 @@ local M = {}
 
 local defaults = {
 	model = nil,
+	variant = nil,
 	max_history = 50,
 	keymaps = {
 		input = "<leader>ii",
@@ -104,6 +105,9 @@ local function build_command(mode, prompt, visual_text, attachments, session_id,
 	end
 	if options.model then
 		vim.list_extend(cmd, { "-m", options.model })
+	end
+	if options.variant then
+		vim.list_extend(cmd, { "--variant", options.variant })
 	end
 	for _, attachment in ipairs(attachments or {}) do
 		vim.list_extend(cmd, { "-f", attachment.path })
@@ -532,7 +536,7 @@ function M.statusline()
 	return "faf:" .. count
 end
 
----@param opts? { model?: string, max_history?: number, keymaps?: boolean | table }
+---@param opts? { model?: string, variant?: string, max_history?: number, keymaps?: boolean | table }
 function M.setup(opts)
 	options = vim.tbl_deep_extend("force", defaults, opts or {})
 	requests.setup({ max_history = options.max_history })

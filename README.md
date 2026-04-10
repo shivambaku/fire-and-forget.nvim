@@ -37,7 +37,8 @@ In the input window, press `Ctrl-V` to attach the current clipboard image and `C
 
 ```lua
 require("faf").setup({
-  model = nil,          -- Uses default if nil
+  model = nil,          -- Uses OpenCode's default model if nil
+  variant = nil,        -- Uses OpenCode's default variant if nil
   max_history = 50,     -- Requests to keep on disk
   keymaps = {
     input = "<leader>ii",
