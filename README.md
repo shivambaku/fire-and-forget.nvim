@@ -2,8 +2,6 @@
 
 **Fire and Forget** is a lightweight Neovim plugin for [opencode](https://github.com/sst/opencode) that runs in the background.
 
-The repo name is `fire-and-forget.nvim`. The plugin's short runtime name stays `faf`, so you still use `require("faf")` and the `:Faf...` commands.
-
 ## Modes
 
 | Mode       | Agent | What it does                    |
@@ -14,13 +12,13 @@ The repo name is `fire-and-forget.nvim`. The plugin's short runtime name stays `
 
 All modes support visual selection.
 
-In the input window, press `Ctrl-V` to attach the current clipboard image and `Ctrl-X` to remove the most recently attached image. These keymaps are available only when a supported clipboard backend is available: `osascript` on macOS, `wl-paste` on Wayland, or `xclip` on X11.
+In the input window, press `Ctrl-V` to attach the current clipboard image and `Ctrl-X` to remove the most recently attached image.
 
 ## Requirements
 
 - Neovim 0.10+
 - [opencode](https://github.com/sst/opencode) CLI in PATH
-- For image paste support: `wl-clipboard` on Wayland or `xclip` on X11
+- For image paste support: `osascript` on macOS, `wl-paste` on Wayland, or `xclip` on X11
 
 ## Installation
 
