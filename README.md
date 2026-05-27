@@ -24,7 +24,7 @@ In the input window, press `Ctrl-V` to attach the current clipboard image and `C
 
 ```lua
 {
-  "your-user/fire-and-forget.nvim",
+  "shivambaku/fire-and-forget.nvim",
   config = function()
     require("faf").setup()
   end,
